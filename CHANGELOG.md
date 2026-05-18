@@ -6,6 +6,10 @@
 
 - **PR #2496** by @Michaelyklam (refs #1925) — Route approval and clarify responses through the default-off `RuntimeAdapter.respond_approval(...)` / `respond_clarify(...)` seam when `HERMES_WEBUI_RUNTIME_ADAPTER=legacy-journal` is enabled. The default `legacy-direct` path still uses the existing callback helpers directly, legacy no-id responses keep their historical `ok: true` shape, and stale explicit approval ids are now bounded as not-active instead of falling back to the oldest queued command. No approval queue, clarify queue, callback registry, runner, sidecar, queue/goal migration, or cached-agent state is introduced.
 
+### Added
+
+- **PR #2500** by @mccxj — Surface `SOUL.md` (the agent's third-person voice/persona profile, stored at `HERMES_HOME/SOUL.md` alongside `config.yaml` / `.env`) as a third section in the Memory panel next to MEMORY.md (notes) and USER.md (profile). `GET /api/memory` now returns `soul`, `soul_path`, and `soul_mtime`; `POST /api/memory/write` accepts `section="soul"` writing to `HERMES_HOME/SOUL.md` (not inside `memories/`). Redaction still applies, i18n labels (`agent_soul` / `no_soul_yet`) added across all 11 locales, new `sparkles` Lucide icon for the section header.
+
 ### Fixed
 
 - **PR #2499** by @franksong2702 — Keep server-idle session rows from inheriting stale local streaming fields during sidebar optimistic merging, so PWA/browser caches cannot keep a completed session's spinner alive after `/api/sessions` reports no active stream or pending user message.
