@@ -1556,7 +1556,7 @@ function _sessionIdFromLocation(){
   }
   try{
     const qs=new URLSearchParams(window.location.search||'');
-    return qs.get('session')||null;
+    return qs.get('session')||qs.get('session_id')||null;
   }catch(_e){return null;}
 }
 function _sessionUrlForSid(sid){

@@ -3,6 +3,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Browser session links that use the API-style `?session_id=<id>` query parameter now open the requested conversation instead of falling back to the last locally stored session.
+
 ## [v0.51.134] — 2026-05-25 — Release DF (stage-batch16 — single-PR Windows path defaults)
 
 ### Fixed
