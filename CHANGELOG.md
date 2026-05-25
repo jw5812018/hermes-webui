@@ -11,6 +11,7 @@
 
 - Browser session links that use the API-style `?session_id=<id>` query parameter now open the requested conversation instead of falling back to the last locally stored session.
 - Gateway status now treats existing messaging-session metadata as configured when `gateway.status` is unavailable, avoiding a misleading "Gateway not configured" warning for multi-container deployments with active gateway sessions.
+- Session sidebar Archive/Delete menu actions now repaint from local sidebar state immediately after the server confirms the mutation, instead of waiting for the full `/api/sessions` refresh before the row disappears.
 
 ## [v0.51.134] — 2026-05-25 — Release DF (stage-batch16 — single-PR Windows path defaults)
 
