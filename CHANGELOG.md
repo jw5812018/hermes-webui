@@ -3,6 +3,21 @@
 
 ## [Unreleased]
 
+## [v0.51.135] — 2026-05-25 — Release DG (stage-batch17 — 9-PR small-fix batch)
+
+### Added
+
+- Added a proposed canonical session resolution RFC covering URL routes, query parameters, localStorage, sidebar rows, and compression-lineage IDs so future session-routing fixes have one review contract.
+
+### Fixed
+
+- Browser session links that use the API-style `?session_id=<id>` query parameter now open the requested conversation instead of falling back to the last locally stored session.
+- Gateway status now treats existing messaging-session metadata as configured when `gateway.status` is unavailable, avoiding a misleading "Gateway not configured" warning for multi-container deployments with active gateway sessions.
+- Session sidebar Archive/Delete menu actions now repaint from local sidebar state immediately after the server confirms the mutation, instead of waiting for the full `/api/sessions` refresh before the row disappears.
+- Clarification dialogs now reserve transcript space while open or collapsed, so the question prompt no longer covers the assistant text needed to answer it.
+- Chat uploads now send the absolute server-side path for image attachments in the agent text context, restoring immediate tool access (e.g. `vision_analyze`) to files uploaded in the current turn.
+- Pending uploaded-file user turns no longer double-render when both the optimistic bubble and the server's pending-message hydration produce the same `[Attached files: ...]` suffix.
+
 ## [v0.51.134] — 2026-05-25 — Release DF (stage-batch16 — single-PR Windows path defaults)
 
 ### Fixed

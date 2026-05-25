@@ -647,6 +647,7 @@ async function loadSession(sid){
     if(!Array.isArray(messages)) return false;
     const pendingMsg=typeof getPendingSessionMessage==='function'?getPendingSessionMessage(session,messages):null;
     if(!pendingMsg) return false;
+    if(messages.some(existing=>_sameTranscriptMessage(existing,pendingMsg))) return false;
     const liveAssistantIdx=messages.findIndex(m=>m&&m.role==='assistant'&&m._live);
     if(liveAssistantIdx>=0) messages.splice(liveAssistantIdx,0,pendingMsg);
     else messages.push(pendingMsg);
@@ -1544,6 +1545,24 @@ function _sessionArchiveToast(response, session){
 function _sessionDeleteDescription(session){
   return session&&session.worktree_path?t('session_delete_worktree_desc'):t('session_delete_desc');
 }
+function _optimisticallyArchiveSessionInList(sid, archived){
+  if(!sid||!Array.isArray(_allSessions)) return;
+  let changed=false;
+  _allSessions=_allSessions.map(s=>{
+    if(!s||s.session_id!==sid) return s;
+    changed=true;
+    return {...s,archived:!!archived};
+  });
+  if(changed) renderSessionListFromCache();
+}
+function _optimisticallyRemoveSessionFromList(sid){
+  if(!sid||!Array.isArray(_allSessions)) return;
+  const before=_allSessions.length;
+  _allSessions=_allSessions.filter(s=>!s||s.session_id!==sid);
+  if(_selectedSessions&&_selectedSessions.has(sid)) _selectedSessions.delete(sid);
+  if(typeof _dropStaleOptimisticSessionRow==='function') _dropStaleOptimisticSessionRow(sid);
+  if(_allSessions.length!==before) renderSessionListFromCache();
+}
 
 function _sessionIdFromLocation(){
   if(typeof window==='undefined'||!window.location) return null;
@@ -1556,7 +1575,7 @@ function _sessionIdFromLocation(){
   }
   try{
     const qs=new URLSearchParams(window.location.search||'');
-    return qs.get('session')||null;
+    return qs.get('session')||qs.get('session_id')||null;
   }catch(_e){return null;}
 }
 function _sessionUrlForSid(sid){
@@ -1866,9 +1885,10 @@ function _openSessionActionMenu(session, anchorEl){
       closeSessionActionMenu();
       try{
         const response=await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:session.session_id,archived:!session.archived})});
+        _optimisticallyArchiveSessionInList(session.session_id,!session.archived);
         session.archived=!session.archived;
         if(S.session&&S.session.session_id===session.session_id) S.session.archived=session.archived;
-        await renderSessionList();
+        void renderSessionList();
         showToast(session.archived?_sessionArchiveToast(response,session):t('session_restored'));
       }catch(err){showToast(t('session_archive_failed')+err.message);}
     }
@@ -1882,9 +1902,10 @@ function _openSessionActionMenu(session, anchorEl){
         closeSessionActionMenu();
         try{
           await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:session.session_id,archived:true})});
+          _optimisticallyArchiveSessionInList(session.session_id,true);
           session.archived=true;
           if(S.session&&S.session.session_id===session.session_id) S.session.archived=true;
-          await renderSessionList();
+          void renderSessionList();
           showToast(t('session_hidden'));
         }catch(err){showToast(t('session_archive_failed')+err.message);}
       }
@@ -3874,6 +3895,7 @@ async function deleteSession(sid){
   let response=null;
   try{
     response=await api('/api/session/delete',{method:'POST',body:JSON.stringify({session_id:sid})});
+    _optimisticallyRemoveSessionFromList(sid);
     _clearHandoffStorageForSession(sid);
   }catch(e){setStatus(`Delete failed: ${e.message}`);return;}
   if(S.session&&S.session.session_id===sid){
@@ -3894,7 +3916,7 @@ async function deleteSession(sid){
     }
   }
   showToast(_sessionResponseRetainsWorktree(response,session)?t('session_deleted_worktree'):t('session_deleted'));
-  await renderSessionList();
+  void renderSessionList();
 }
 
 // ── Project helpers ─────────────────────────────────────────────────────
