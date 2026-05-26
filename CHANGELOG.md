@@ -3,6 +3,8 @@
 
 ## [Unreleased]
 
+## [v0.51.138] — 2026-05-25 — Release DJ (stage-batch20 — 7-PR ultra-safe batch)
+
 ### Added
 
 - **PR #2972** by @Michaelyklam (refs #1925) — Advance the runtime-adapter RFC after the Slice 4e route-selection harness shipped in v0.51.129. The RFC now defines the Slice 4f supervised local runner client backend gate: replace the bounded `runner-local` 501 only when explicitly configured, prove restart/reattach from durable runner/journal state, preserve the public chat-start field whitelist, require cancel as the first live runner-owned control, and keep active-run discovery/supervision out of new WebUI process-local runtime-surrogate globals.
