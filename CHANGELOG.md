@@ -3,6 +3,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Conversation filtering now shows a clear button inside the search field whenever text is present, letting users clear the filter with one click.
+
 ## [v0.51.161] — 2026-05-29 — Release EG (stage-batch43 — 3-PR live-display fixes: jump-to-question on intermediate assistant messages + per-turn usage badge persistence + stale unread/compression-timer/tool-card dedup)
 
 ### Fixed
