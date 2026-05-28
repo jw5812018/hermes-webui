@@ -7619,6 +7619,13 @@ def _session_media_token_allows_image_path(sid: str, target: Path, image_mimes: 
     for message in getattr(session, "messages", []) or []:
         if not isinstance(message, dict):
             continue
+        # Only honor MEDIA: tokens that the assistant/tool emitted. User-authored
+        # content cannot mint allow-list entries even if it contains a MEDIA:
+        # token — keeps the implicit threat model (assistant-emitted artifacts
+        # only) explicit.
+        role = str(message.get("role") or "").strip().lower()
+        if role == "user":
+            continue
         text = _message_content_text(message.get("content"))
         if "MEDIA:" not in text:
             continue
