@@ -3609,6 +3609,69 @@ def _agent_cache_api_key_sig(resolved_api_key, credential_pool) -> str:
     return _hashlib.sha256((resolved_api_key or '').encode()).hexdigest()[:16]
 
 
+def _lifecycle_commit_session_memory(session_id: str, *, agent=None, wait: bool = False) -> bool:
+    from api.session_lifecycle import commit_session_memory
+
+    return commit_session_memory(session_id, agent=agent, wait=wait)
+
+
+def _lifecycle_has_uncommitted_work(session_id: str) -> bool:
+    from api.session_lifecycle import has_uncommitted_work
+
+    return has_uncommitted_work(session_id)
+
+
+def _lifecycle_unregister_agent(session_id: str) -> None:
+    from api.session_lifecycle import unregister_agent
+
+    unregister_agent(session_id)
+
+
+def _close_evicted_agent_at_session_boundary(session_id: str, agent) -> bool:
+    """Commit and tear down an evicted cached agent at a WebUI session boundary.
+
+    WebUI keeps AIAgent instances in an LRU cache so memory providers can carry
+    state across turns. When an agent is evicted, commit pending memory first;
+    if the lifecycle entry is clean afterwards, unregister and call
+    shutdown_memory_provider(messages) so provider-owned clients such as
+    Hindsight's aiohttp session are closed instead of being garbage-collected
+    later. Passing the cached transcript mirrors gateway cleanup semantics for
+    providers that use on_session_end(messages) during shutdown.
+    """
+    if agent is None:
+        return True
+
+    should_close_evicted_agent = True
+    try:
+        _lifecycle_commit_session_memory(session_id, agent=agent, wait=True)
+        if not _lifecycle_has_uncommitted_work(session_id):
+            _lifecycle_unregister_agent(session_id)
+        else:
+            should_close_evicted_agent = False
+    except Exception:
+        should_close_evicted_agent = False
+        logger.debug("Lifecycle commit on eviction failed for %s", session_id, exc_info=True)
+
+    if not should_close_evicted_agent:
+        return False
+
+    try:
+        shutdown_memory_provider = getattr(agent, 'shutdown_memory_provider', None)
+        if callable(shutdown_memory_provider):
+            session_messages = vars(agent).get('_session_messages', [])
+            shutdown_memory_provider(session_messages)
+    except Exception:
+        logger.debug("Failed to shut down evicted agent memory provider for session %s", session_id, exc_info=True)
+
+    try:
+        session_db = getattr(agent, '_session_db', None)
+        if session_db is not None:
+            session_db.close()
+    except Exception:
+        logger.debug("Failed to close evicted agent session DB for session %s", session_id, exc_info=True)
+    return True
+
+
 def _refresh_cached_agent_runtime(agent, agent_kwargs: dict) -> bool:
     """Refresh volatile runtime credentials on a reused cached AIAgent.
 
@@ -4880,24 +4943,7 @@ def _run_agent_streaming(
                     for _evicted_sid, _evicted_entry in _evicted_items:
                         try:
                             _evicted_agent = _evicted_entry[0] if isinstance(_evicted_entry, tuple) else None
-                            _should_close_evicted_agent = True
-                            if _evicted_agent is not None:
-                                try:
-                                    from api.session_lifecycle import (
-                                        commit_session_memory as _lifecycle_commit,
-                                        has_uncommitted_work as _lifecycle_has_uncommitted_work,
-                                        unregister_agent as _lifecycle_unregister_agent,
-                                    )
-                                    _lifecycle_commit(_evicted_sid, agent=_evicted_agent, wait=True)
-                                    if not _lifecycle_has_uncommitted_work(_evicted_sid):
-                                        _lifecycle_unregister_agent(_evicted_sid)
-                                    else:
-                                        _should_close_evicted_agent = False
-                                except Exception:
-                                    _should_close_evicted_agent = False
-                                    logger.debug("Lifecycle commit on eviction failed for %s", _evicted_sid, exc_info=True)
-                            if _should_close_evicted_agent and _evicted_agent is not None and getattr(_evicted_agent, '_session_db', None) is not None:
-                                _evicted_agent._session_db.close()
+                            _close_evicted_agent_at_session_boundary(_evicted_sid, _evicted_agent)
                         except Exception:
                             logger.debug("Failed to close evicted agent for session %s", _evicted_sid, exc_info=True)
                         logger.debug('[webui] Evicted LRU agent from cache: %s', _evicted_sid)
