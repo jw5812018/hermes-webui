@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.165] — 2026-05-30 — Release EK (stage-batch47 — stop EventSource reconnect storm on long-lived SSE streams)
+
+### Fixed
+
+- The session-events and gateway SSE streams no longer emit `Connection: close`, which browsers interpreted as a signal that the EventSource lifecycle had ended — triggering an instant reconnect loop that thrashed the session list roughly once per second and forced repeated re-renders / scroll-to-bottom (#3103, regression from the HTTP/1.1 keep-alive change in 598fd4ff). Finite responses that lack a `Content-Length` (e.g. the on-the-fly workspace ZIP download) keep `Connection: close` for unambiguous HTTP/1.1 message framing.
+
 ## [v0.51.164] — 2026-05-30 — Release EJ (stage-batch46 — passive performance hardening: refresh coalescing + draft-save dedup + activity placeholders + bounded restart-safety wait)
 
 ### Fixed
