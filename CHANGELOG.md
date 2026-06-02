@@ -3,6 +3,11 @@
 
 ## [Unreleased]
 
+## [v0.51.214] — 2026-06-02 — Release GH (stage-p2c — preserve loaded transcript width on same-session external refresh)
+
+### Fixed
+- A same-session external refresh (e.g. a background poll triggering a force-reload of the conversation you're reading) no longer collapses a long transcript back to the default 30-message tail window and jumps the viewport to a different slice. The already-loaded transcript width and scroll position are now captured before the in-memory transcript is cleared and preserved across the authoritative reload (#3326, @viraatdas, closes #3239).
+
 ## [v0.51.213] — 2026-06-02 — Release GG (stage-p2b — keep gateway context visible in chat transcripts)
 
 ### Fixed
