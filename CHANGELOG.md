@@ -3,7 +3,12 @@
 
 ## [Unreleased]
 
-## [v0.51.223] — 2026-06-02 — Release GQ (stage-p5 — openai-api picker provider + MiniMax-M3)
+## [v0.51.224] — 2026-06-03 — Release GR (stage-p6 — profile tool/skill config authoritative on the streaming worker)
+
+### Fixed
+- Profile tool/skill restrictions are now respected for WebUI chats even when the per-session "Tool Restrictions" field is left blank. The streaming agent runs on a detached worker thread that does not inherit the per-request thread-local profile context, so the ambient `get_config()` resolved the process-global `default` profile and loaded its `platform_toolsets.cli` (all tools) instead of the session profile's configured list — inflating a tools-disabled profile's prompt from ~400 to ~15K input tokens. The worker now reads the session's own profile config explicitly via a new `get_config_for_profile_home()` helper (a race-free direct disk read with no shared-cache mutation), so toolsets, prefill context, and fallback chains all match the profile the session actually runs under (#3294, @nesquena-hermes).
+
+## [v0.51.223] — 2026-06-02 — Release GQ (stage-p5 — openai-api first-class picker provider + MiniMax-M3)
 
 ### Fixed
 - GPT models now appear in the model picker when hermes-agent exposes its built-in OpenAI provider under the `openai-api` slug (the one activated by `OPENAI_API_KEY` / `OPENAI_BASE_URL`, distinct from `openai-codex`). `openai-api` is now a first-class picker provider in `_PROVIDER_DISPLAY` / `_PROVIDER_MODELS` rather than an alias of `openai` — an alias would have fixed the display but broken the send path, since the agent registry has `openai-api` and not `openai`. Env detection for `OPENAI_API_KEY` was also corrected to surface `openai-api` instead of a bare `openai` the agent registry can't resolve (#3443, @rodboev).

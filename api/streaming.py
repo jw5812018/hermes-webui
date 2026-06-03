@@ -4892,9 +4892,20 @@ def _run_agent_streaming(
                 resolved_provider, resolved_api_key, resolved_base_url
             )
 
-            # Read per-profile config at call time (not module-level snapshot)
-            from api.config import get_config as _get_config
-            _cfg = _get_config()
+            # Read per-profile config at call time (not module-level snapshot).
+            # The streaming worker is a detached thread that does NOT inherit the
+            # per-request thread-local profile context, so the ambient
+            # get_config() would resolve the process-global (default) profile and
+            # leak the wrong profile's toolsets / prefill / fallback config into
+            # this run (issue #3294). Read the SESSION's own profile home
+            # explicitly so toolsets and context match the profile the session
+            # actually runs under.
+            from api.config import get_config_for_profile_home as _get_config_for_home
+            try:
+                _cfg = _get_config_for_home(_profile_home)
+            except Exception:
+                from api.config import get_config as _get_config
+                _cfg = _get_config()
             _prefill_context = _load_webui_prefill_context(_cfg)
             _prefill_messages = _prefill_messages_with_webui_context(_prefill_context, _cfg)
             put('context_status', {

@@ -382,6 +382,43 @@ def _load_yaml_config_file(config_path: Path) -> dict:
         return {}
 
 
+def get_config_for_profile_home(profile_home: "Path | str | None") -> dict:
+    """Return the config dict for an explicit profile home directory.
+
+    The streaming agent runs on a detached worker thread that does NOT inherit
+    the per-request thread-local profile context (set from the ``hermes_profile``
+    cookie on the HTTP handler thread). On that worker, the ambient
+    ``get_config()`` resolves through ``get_active_profile_name()`` which falls
+    back to the process-global ``_active_profile`` (usually ``default``) — so a
+    session running under a non-default profile would silently read the
+    **default** profile's ``config.yaml`` for toolsets, prefill context, and
+    fallback chains (issue #3294).
+
+    This helper reads the config for a *known* profile home directly off disk,
+    bypassing the thread-local resolver entirely. When ``profile_home`` matches
+    the path the ambient resolver would pick (the common single-profile case),
+    we return the cached ``get_config()`` to preserve in-memory overrides used
+    by tests and runtime callers. Only when the session's profile home diverges
+    from the ambient path do we read the session profile's file directly — a
+    pure read with no global cache mutation, so it is race-free across
+    concurrent sessions on different profiles.
+    """
+    if not profile_home:
+        return get_config()
+    try:
+        target = Path(profile_home).expanduser()
+    except Exception:
+        return get_config()
+    # If the ambient resolver already points at this profile home, defer to
+    # get_config() so in-memory overrides (monkeypatched cfg) are honored.
+    try:
+        if _get_config_path().parent == target:
+            return get_config()
+    except Exception:
+        pass
+    return _load_yaml_config_file(target / "config.yaml")
+
+
 def _save_yaml_config_file(config_path: Path, config_data: dict) -> None:
     try:
         import yaml as _yaml
