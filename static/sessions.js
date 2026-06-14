@@ -3694,9 +3694,16 @@ function _installSidebarSseFocusHook(){
   });
   window.addEventListener('focus', () => {
     if(_sidebarSseBlurCloseTimer){ clearTimeout(_sidebarSseBlurCloseTimer); _sidebarSseBlurCloseTimer = 0; }
-    // Reopen (both ensure-idempotent) and catch up on anything missed while blurred.
+    // Reopen and catch up on anything missed while blurred. ensureSessionEventsSSE()
+    // is idempotent (`if(_sessionEventsSSE) return`), but startGatewaySSE() is NOT — it
+    // begins with an unconditional stopGatewaySSE(). So only reopen the gateway when it
+    // was actually closed; otherwise a transient blur shorter than the debounce (where
+    // the blur-close timer was cleared and the stream was never torn down) would
+    // drop+reconnect the live gateway on every window switch, cancelling its poll
+    // fallback and resetting probe/warning state — the exact thrash the debounce exists
+    // to prevent, in the multi-window scenario this fix targets (#4151).
     ensureSessionEventsSSE();
-    startGatewaySSE();
+    if(!_gatewaySSE) startGatewaySSE();
     void refreshSessionList('focus');
   });
 }

@@ -50,7 +50,7 @@ def test_focus_hook_closes_both_global_sidebar_streams():
     """The blur path closes the session-events AND gateway streams."""
     assert "function _installSidebarSseFocusHook()" in SESSIONS_JS
     start = SESSIONS_JS.find("function _installSidebarSseFocusHook()")
-    block = SESSIONS_JS[start:start + 1100]
+    block = SESSIONS_JS[start:start + 1700]
     # Installed once.
     assert "_hermesSidebarSseFocusHook" in block
     # Blur listener tears down both global streams.
@@ -70,13 +70,41 @@ def test_blur_close_is_debounced_and_rechecks_focus_at_fire_time():
     when it fires, so focus returning during the debounce cancels the teardown.
     """
     start = SESSIONS_JS.find("function _installSidebarSseFocusHook()")
-    block = SESSIONS_JS[start:start + 1100]
+    block = SESSIONS_JS[start:start + 1700]
     assert "_sidebarSseBlurCloseTimer" in block
     assert "setTimeout(" in block
     # Re-check guards the actual close so a returned focus is a no-op.
     assert "if(_sidebarSseBackgrounded()){" in block
     # Focus listener clears any pending blur-close timer.
     assert "clearTimeout(_sidebarSseBlurCloseTimer)" in block
+
+
+def test_focus_reopen_does_not_thrash_the_gateway_stream():
+    """The focus handler must NOT unconditionally restart the gateway stream.
+
+    startGatewaySSE() begins with an unconditional stopGatewaySSE() (it is NOT
+    idempotent, unlike ensureSessionEventsSSE()'s `if(_sessionEventsSSE) return`).
+    On a transient blur shorter than the 1s debounce, the blur-close timer is
+    cleared and the gateway stream is never torn down — so an unconditional
+    startGatewaySSE() on the following focus would drop+reconnect the live gateway,
+    cancel its poll fallback, and reset probe/warning state on every window switch
+    (the exact thrash the debounce exists to prevent, in the multi-window scenario
+    #4151 targets). The reopen must therefore be guarded on the gateway actually
+    being closed. (greptile P1.)
+    """
+    start = SESSIONS_JS.find("function _installSidebarSseFocusHook()")
+    block = SESSIONS_JS[start:start + 1700]
+    focus_idx = block.find("window.addEventListener('focus'")
+    assert focus_idx != -1
+    focus_body = block[focus_idx:]
+    # The gateway reopen is guarded on the stream being closed (mirrors the
+    # session-events idempotency), not called unconditionally.
+    assert "if(!_gatewaySSE) startGatewaySSE()" in focus_body, (
+        "focus handler must guard startGatewaySSE() on `!_gatewaySSE` so a "
+        "transient blur+focus does not drop+reconnect a still-open gateway stream"
+    )
+    # And it must NOT call startGatewaySSE() bare (unguarded) on focus.
+    assert "\n    startGatewaySSE();" not in focus_body
 
 
 def test_session_events_open_guard_uses_backgrounded_predicate():
@@ -121,7 +149,7 @@ def test_per_session_stream_NOT_closed_on_blur():
         )
     # (b) the sidebar focus hook only manages the two global streams.
     start = SESSIONS_JS.find("function _installSidebarSseFocusHook()")
-    block = SESSIONS_JS[start:start + 1100]
+    block = SESSIONS_JS[start:start + 1700]
     assert "stopSessionStream" not in block
     assert "startSessionStream" not in block
 
