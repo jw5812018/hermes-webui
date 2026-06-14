@@ -3650,6 +3650,7 @@ async function refreshActiveSessionIfExternallyUpdated(reason){
   if(_activeSessionExternalRefreshInFlight) return;
   if(!S.session || !S.session.session_id) return;
   if(S.busy || S.activeStreamId) return;
+  if(!_isExternalSession(S.session)) return;
   // Cooldown: don't force-reload immediately after streaming ends — the
   // "done" event already delivered the final messages. Reloading here would
   // clear S.toolCalls and lose Activity.
