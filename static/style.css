@@ -4929,7 +4929,8 @@ main.main > #mainPlugin{display:none;}
   100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
 }
 @media (max-width: 600px) {
-  .msg-question-jump-btn { display: none; }
+  .msg-question-jump-btn { padding: 3px 4px; }
+  .msg-question-jump-btn span:last-child { display: none; }
 }
 .msg-foot-with-usage {
   justify-content: flex-start;
