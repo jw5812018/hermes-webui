@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.543] — 2026-06-20 — Release TB (stable assistant turn anchors — Compact Worklog stays consistent across live, settle, refresh, and re-entry)
+
+### Added
+
+- **The Compact Worklog now renders the same ordered turn whether it's streaming live, settled, reloaded after a hard refresh, or re-opened later (#3926).** A persisted "assistant turn anchor" model (`activity_scene_v1`) captures each assistant turn's worklog (reasoning rows, tool-call cards) and final answer as a durable scene, so the transcript no longer drifts between the live stream and what you see on reload. Live-only rows are cleaned up on both browser settlement and server hydration, the persisted scene is the source of truth on re-entry, and pre-anchor sessions keep rendering via the existing legacy path unchanged (no migration, graceful fallback). The anchor scene schema is bounded and sanitized (version-checked, capped rows/bytes, LRU), and the `/api/session/anchor-scene` persistence endpoint is auth- and profile-scoped. This is the culmination of the incrementally-shipped anchor series (#3927 RFC → #3980/#4037/#4092/#4093/#4108/#4120/#4126). Thanks @franksong2702.
+
 ## [v0.51.542] — 2026-06-20 — Release TA (model picker stays in sync with the agent's catalog)
 
 ### Fixed
