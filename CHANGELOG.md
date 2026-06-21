@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.554] — 2026-06-21 — Release TM (the transcript stays put when you scroll up during a live reply)
+
+### Fixed
+
+- **Scrolling up to read earlier messages during a live reply no longer snaps you back to the bottom (#4295).** During mid-stream transcript rebuilds the reader's viewport anchor is now preserved before any raw scroll-position fallback, and a manual scroll-away is treated as authoritative so the distance-based heuristic can't re-pin you to the bottom mid-answer. Readers who are following the bottom still auto-follow as before. Thanks @franksong2702.
+
 ## [v0.51.553] — 2026-06-21 — Release TL (extensions diagnostics panel in Settings)
 
 ### Added
