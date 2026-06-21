@@ -114,7 +114,7 @@ def test_server_runtime_journal_snapshot_restores_structured_inflight_state():
     helper_pos = SESSIONS_SRC.index("function _serverLiveSnapshotToolId")
     helper_block = SESSIONS_SRC[helper_pos : helper_pos + 3600]
     load_pos = SESSIONS_SRC.index("async function loadSession")
-    load_block = SESSIONS_SRC[load_pos : load_pos + 18000]
+    load_block = SESSIONS_SRC[load_pos : load_pos + 20000]
 
     assert "runtime_journal_snapshot" in load_block
     assert "_serverLiveSnapshotInflight(S.session.runtime_journal_snapshot" in load_block
