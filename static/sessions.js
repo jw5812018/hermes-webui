@@ -2673,6 +2673,8 @@ let _showAllProfiles = false;  // false = filter to active profile only
 let _otherProfileCount = 0;       // count of sessions from other profiles (server-reported)
 let _archivedWebuiCount = 0;      // archived WebUI sessions not fetched until requested
 let _archivedCliCount = 0;        // archived non-WebUI sessions not fetched until requested
+let _serverWebuiSessionCount = null;  // explicit server count for WebUI sessions
+let _serverCliSessionCount = null;    // explicit server count for CLI sessions
 let _sessionSourceFilter = 'webui';  // 'webui' keeps WebUI chats separate from read-only CLI sessions
 _restoreSessionSourceFilter();
 let _sessionActionMenu = null;
@@ -3746,6 +3748,14 @@ function _applySessionListPayload(sessData, projData){
   _otherProfileCount = sessData.other_profile_count || 0;
   _archivedWebuiCount = Number(sessData.archived_webui_count ?? sessData.archived_count ?? 0);
   _archivedCliCount = Number(sessData.archived_cli_count ?? 0);
+  _serverWebuiSessionCount = Object.prototype.hasOwnProperty.call(sessData, 'webui_session_count')
+    ? Number(sessData.webui_session_count)
+    : null;
+  _serverCliSessionCount = Object.prototype.hasOwnProperty.call(sessData, 'cli_session_count')
+    ? Number(sessData.cli_session_count)
+    : null;
+  if (!Number.isFinite(_serverWebuiSessionCount)) _serverWebuiSessionCount = null;
+  if (!Number.isFinite(_serverCliSessionCount)) _serverCliSessionCount = null;
   // Capture server clock for clock-skew compensation (issue #1144).
   // server_time is epoch seconds from the server's time.time().
   // _serverTimeDelta = client - server, so (Date.now() - _serverTimeDelta)
@@ -3827,6 +3837,8 @@ async function _runRenderSessionListRefresh(opts, _gen){
   try{
     if(!($('sessionSearch').value||'').trim()) _contentSearchResults = [];
     const qs = new URLSearchParams();
+    const requestSidebarSource = window._showCliSessions ? _sessionSourceFilter : 'webui';
+    qs.set('sidebar_source', requestSidebarSource);
     if(_showAllProfiles) qs.set('all_profiles','1');
     if(_showArchived) qs.set('include_archived','1');
     const sessionListQS = qs.toString() ? `?${qs.toString()}` : '';
@@ -5550,12 +5562,14 @@ function renderSessionListFromCache(){
   }=_partitionSidebarSessionRows(allMatched, activeSidForSidebar);
   const referenceRaw=_sessionSourceFilter==='cli'?cliReferenceRaw:webuiReferenceRaw;
   const sessions=_renderSidebarRowsFromRawSessions(sessionsRaw, referenceRaw);
-  const renderedWebuiSessionCount=_sessionSourceFilter==='webui'
-    ? sessions.length
-    : _renderSidebarRowsFromRawSessions(webuiSessionsRaw, webuiReferenceRaw).length;
-  const renderedCliSessionCount=_sessionSourceFilter==='cli'
-    ? sessions.length
-    : _renderSidebarRowsFromRawSessions(cliSessionsRaw, cliReferenceRaw).length;
+  const renderedWebuiSessionCount=_renderSidebarRowsFromRawSessions(webuiSessionsRaw, webuiReferenceRaw).length;
+  const renderedCliSessionCount=_renderSidebarRowsFromRawSessions(cliSessionsRaw, cliReferenceRaw).length;
+  const webuiSessionTabCount=Number.isFinite(_serverWebuiSessionCount)
+    ? _serverWebuiSessionCount
+    : renderedWebuiSessionCount;
+  const cliSessionTabCount=Number.isFinite(_serverCliSessionCount)
+    ? _serverCliSessionCount
+    : renderedCliSessionCount;
   _syncSidebarExpansionForActiveSession(sessions, activeSidForSidebar);
   const list=$('sessionList');
   const animateRefresh=_sessionListRefreshAnimationPending;
@@ -5616,7 +5630,7 @@ function renderSessionListFromCache(){
     const sourceTabs=document.createElement('div');
     sourceTabs.className='session-source-tabs';
     for(const filter of ['webui','cli']){
-      const count=filter==='cli'?renderedCliSessionCount:renderedWebuiSessionCount;
+      const count=filter==='cli'?cliSessionTabCount:webuiSessionTabCount;
       const btn=document.createElement('button');
       btn.type='button';
       btn.className='session-source-tab'+(_sessionSourceFilter===filter?' active':'');
