@@ -436,6 +436,9 @@ let _messageVirtualMeasurementRetryCount=0;
 let _messageVirtualScrollActive=false;
 let _messageVirtualScrollSettleTimer=0;
 let _messageVirtualDeferredMeasurement=null;
+let _msgNodeRecycleEnabled=false;
+const _recycleStash=new Map();
+let _scrollbarDragActive=false;
 function _markMessageVirtualScrollActive(){
   _messageVirtualScrollActive=true;
   clearTimeout(_messageVirtualScrollSettleTimer);
@@ -817,9 +820,10 @@ function _restoreMessageViewportAnchor(anchor, rawIdxDelta){
   const containerRect=container.getBoundingClientRect();
   const rect=row.getBoundingClientRect();
   const targetTop=Number(anchor.topOffset)||0;
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   container.scrollTop+=(rect.top-containerRect.top)-targetTop;
-  requestAnimationFrame(()=>{ _programmaticScroll=false; });
+  if(typeof _deferClearProgrammaticScroll==='function') _deferClearProgrammaticScroll();
+  else requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
   return true;
 }
 let _messageViewportAnchorRemounting=false;
@@ -885,10 +889,10 @@ function _compensateScrollForMeasurementDelta(renderFn){
   const actualOffset=rowRect.top-containerRect.top;
   const delta=actualOffset-anchorBefore.topOffset;
   if(Math.abs(delta)<2) return;
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   container.scrollTop=scrollTopBefore+delta;
   _lastScrollTop=container.scrollTop;
-  requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
+  _deferClearProgrammaticScroll();
 }
 function _messageViewportIntersectsRenderedRow(){
   const container=$('messages');
@@ -965,7 +969,19 @@ function _scheduleMessageVirtualizedRender(force){
     const liveWindow=_currentMessageVirtualWindow(liveVisWithIdx,_messageVirtualKeepTailCount());
     const liveKey=_messageVirtualWindowKeyFor(liveWindow);
     if(!force&&liveKey===_messageVirtualWindowKey) return;
-    _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
+    if(_scrollbarDragActive){
+      _programmaticScroll=true;
+      _programmaticScrollSetAt=performance.now();
+      _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
+      _deferClearProgrammaticScroll();
+      _messageVirtualWindowKey=liveKey;
+      return;
+    }
+    _msgNodeRecycleEnabled=true;
+    try{
+      _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
+    }
+    finally{ _msgNodeRecycleEnabled=false; }
   });
 }
 
@@ -1046,7 +1062,7 @@ async function jumpToSessionStart(){
   if(!container||!S.session) return;
   _scrollPinned=false;
   _messageUserUnpinned=true;
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   try{
     // During active streaming, skip full message load — API response won't
     // include live messages from the current turn, and replacing S.messages
@@ -1065,7 +1081,7 @@ async function jumpToSessionStart(){
     requestAnimationFrame(()=>{
       container.scrollTop=0;
       _updateSessionStartJumpButton();
-      requestAnimationFrame(()=>{ _programmaticScroll=false; });
+      _deferClearProgrammaticScroll();
     });
   }catch(e){
     console.warn('jumpToSessionStart failed:',e);
@@ -1124,7 +1140,7 @@ async function jumpToTurnQuestion(questionRawIdx, assistantRawIdx){
   if(visibleIdx>=0){
     _scrollPinned=false;
     _messageUserUnpinned=true;
-    _programmaticScroll=true;
+    _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
     container.scrollTop=_messageVirtualScrollTopForVisibleIdx(visWithIdx, visibleIdx, container);
     _messageVirtualWindowKey='';
     renderMessages({ preserveScroll:true });
@@ -1135,7 +1151,7 @@ async function jumpToTurnQuestion(questionRawIdx, assistantRawIdx){
         renderMessages({ preserveScroll:true });
         requestAnimationFrame(scrollToTarget);
       }
-      requestAnimationFrame(()=>{ _programmaticScroll=false; });
+      _deferClearProgrammaticScroll();
     });
     return;
   }
@@ -3667,6 +3683,9 @@ window.addEventListener('resize',function(){
 // Programmatic scrolls are ignored via _programmaticScroll. Fixes #1469 / #1360 / #1731.
 let _scrollPinned=true;
 let _programmaticScroll=false;
+let _programmaticScrollSetAt=0;
+let _programmaticScrollResetTimer=0;
+function _deferClearProgrammaticScroll(ms){clearTimeout(_programmaticScrollResetTimer);_programmaticScrollResetTimer=setTimeout(()=>{_programmaticScroll=false;},ms||80);}
 let _nearBottomCount=0;
 let _lastScrollTop=null;
 // Sticky-unpin model (#3343 supersedes #3330's proximity re-pin): once the user
@@ -3898,10 +3917,28 @@ if(typeof window!=='undefined'){
 (function(){
   const el=document.getElementById('messages');
   if(!el) return;
+  el.addEventListener('pointerdown',(e)=>{
+    if(e.offsetX>=el.clientWidth) _scrollbarDragActive=true;
+  },{passive:true});
+  window.addEventListener('pointerup',()=>{
+    if(!_scrollbarDragActive) return;
+    _scrollbarDragActive=false;
+    _scheduleMessageVirtualizedRender(true);
+  },{passive:true});
+  window.addEventListener('pointercancel',()=>{
+    if(!_scrollbarDragActive) return;
+    _scrollbarDragActive=false;
+    _scheduleMessageVirtualizedRender(true);
+  },{passive:true});
+  window.addEventListener('blur',()=>{ _scrollbarDragActive=false; },{passive:true});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='hidden') _scrollbarDragActive=false;
+  },{passive:true});
   let _scrollRaf=0;
   el.addEventListener('scroll',()=>{
     _scheduleMessageVirtualizedRender();
-    if(_programmaticScroll) return; // ignore scrolls we triggered ourselves
+    if(_programmaticScroll&&(performance.now()-_programmaticScrollSetAt)>150) _programmaticScroll=false;
+    if(_programmaticScroll) return;
     _markMessageVirtualScrollActive();
     cancelAnimationFrame(_scrollRaf);
     _scrollRaf=requestAnimationFrame(()=>{
@@ -4399,7 +4436,7 @@ document.addEventListener('DOMContentLoaded',function(){
 function _setMessageScrollToBottom(){
   const el=$('messages');
   if(!el) return;
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   el.scrollTop=el.scrollHeight;
   _lastScrollTop=el.scrollTop;
   _nearBottomCount=2;
@@ -4412,14 +4449,14 @@ function _setMessageScrollToBottom(){
     // is the authoritative "user scrolled away" signal, so DON'T snap them back
     // or re-pin if so; only release the programmatic-scroll latch.
     if(_messageUserUnpinned || !_scrollPinned || _recentNonMessageScrollIntent()){
-      requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+      _deferClearProgrammaticScroll();
       return;
     }
     el.scrollTop=el.scrollHeight;
     _lastScrollTop=el.scrollTop;
     _nearBottomCount=2;
     _scrollPinned=true;
-    requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+    _deferClearProgrammaticScroll();
   });
 }
 function _isMessagePaneNearBottom(threshold=250){
@@ -4533,14 +4570,12 @@ function _settleFinalScroll(token){
     _programmaticScroll=false;
     return;
   }
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   el.scrollTop=el.scrollHeight;
   _lastScrollTop=el.scrollTop;
   _nearBottomCount=2;
   _scrollPinned=true;
-  requestAnimationFrame(()=>{
-    setTimeout(()=>{ _programmaticScroll=false; },0);
-  });
+  _deferClearProgrammaticScroll();
 }
 function scrollIfPinned(){
   if(!_autoScrollFollow) return;
@@ -10932,7 +10967,7 @@ function _restoreMessageScrollSnapshot(snapshot){
       : false;
   }
   if(!restoredViaAnchor){
-    _programmaticScroll=true;
+    _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
     el.scrollTop=Math.max(0,Math.min(Number(snapshot.top)||0,maxTop));
   }
   // Sync _lastScrollTop after programmatic restore so sticky-unpin does not false-trigger (#1731).
@@ -10958,7 +10993,8 @@ function _restoreMessageScrollSnapshot(snapshot){
     }
   }
   if(!restoredViaAnchor){
-    requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+    if(typeof _deferClearProgrammaticScroll==='function') _deferClearProgrammaticScroll();
+    else requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
   }
 }
 function _restoreMessageScrollSnapshotSameFrame(snapshot){
@@ -10978,7 +11014,7 @@ function _restoreMessageScrollSnapshotSameFrame(snapshot){
     const target=(snapshot.pinned===true&&Number.isFinite(bottom))
       ? maxTop-Math.max(0,bottom)
       : Number(snapshot.top)||0;
-    _programmaticScroll=true;
+    _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
     el.scrollTop=Math.max(0,Math.min(target,maxTop));
   }
   _lastScrollTop=el.scrollTop;
@@ -10992,7 +11028,8 @@ function _restoreMessageScrollSnapshotSameFrame(snapshot){
     _nearBottomCount=0;
   }
   if(!restoredViaAnchor){
-    requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+    if(typeof _deferClearProgrammaticScroll==='function') _deferClearProgrammaticScroll();
+    else requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
   }
 }
 function _renderMessagesWithScrollSnapshot(options){
@@ -11185,6 +11222,15 @@ function renderMessages(options){
     S.session && typeof S.session.compression_anchor_summary==='string'
   ) ? S.session.compression_anchor_summary.trim() : '';
   const worklogDetailDisclosureState=_captureWorklogDetailDisclosureState(inner);
+  _recycleStash.clear();
+  if(_msgNodeRecycleEnabled){
+    for(const child of Array.from(inner.children)){
+      const key=child.dataset&&(child.dataset.recycleKey||child.dataset.msgIdx);
+      if(!key) continue;
+      if(child.id==='liveAssistantTurn'||child.querySelector&&child.querySelector('#liveAssistantTurn')) continue;
+      _recycleStash.set(Number(key), child);
+    }
+  }
   inner.innerHTML='';
   const compressionNode=compressionState?_compressionCardsNode(compressionState):null;
   const {message:referenceMessage, rawIdx:referenceMessageRawIdx}=_latestCompressionReferenceMessage(
@@ -11452,22 +11498,54 @@ function renderMessages(options){
 
     if(isUser){
       currentAssistantTurn=null;
-      const row=document.createElement('div');
-      row.className='msg-row';
-      row.id=_userMessageDomId(rawIdx);
-      row.dataset.msgIdx=rawIdx;
-      row.dataset.sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
-      row.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
-      row.dataset.role='user';
-      row.dataset.rawText=String(displayContent).trim();
-      row.innerHTML=`${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`;
+      let row=_msgNodeRecycleEnabled?_recycleStash.get(rawIdx):null;
+      if(row&&(!row.classList.contains('msg-row')||row.classList.contains('assistant-turn'))) row=null;
+      const newRawText=String(displayContent).trim();
+      const nextRowHtml=`${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`;
+      if(row){
+        row.id=_userMessageDomId(rawIdx);
+        row.dataset.msgIdx=rawIdx;
+        row.dataset.sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
+        row.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
+        row.dataset.role='user';
+        delete row.dataset.editing;
+        if(row.dataset.rawText!==newRawText||row.innerHTML!==nextRowHtml){
+          row.dataset.rawText=newRawText;
+          row.innerHTML=nextRowHtml;
+        }
+      }else{
+        row=document.createElement('div');
+        row.className='msg-row';
+        row.id=_userMessageDomId(rawIdx);
+        row.dataset.msgIdx=rawIdx;
+        row.dataset.sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
+        row.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
+        row.dataset.role='user';
+        row.dataset.rawText=newRawText;
+        row.innerHTML=nextRowHtml;
+      }
       inner.appendChild(row);
       userRows.set(rawIdx, row);
       continue;
     }
 
     if(!currentAssistantTurn){
-      currentAssistantTurn=_createAssistantTurn(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
+      let recycled=_msgNodeRecycleEnabled?_recycleStash.get(rawIdx):null;
+      if(recycled&&!recycled.classList.contains('assistant-turn')) recycled=null;
+      if(recycled){
+        const blocks=_assistantTurnBlocks(recycled);
+        if(blocks) blocks.innerHTML='';
+        recycled.removeAttribute('data-transparent-turn-collapsed');
+        recycled.removeAttribute('data-transparent-turn-toggle-bound');
+        const role=recycled.querySelector('.msg-role.assistant');
+        if(role) role.outerHTML=_assistantRoleHtml(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
+        currentAssistantTurn=recycled;
+      }else{
+        currentAssistantTurn=_createAssistantTurn(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
+      }
+      currentAssistantTurn.dataset.role='assistant';
+      if(S.session) currentAssistantTurn.dataset.sessionId=S.session.session_id;
+      currentAssistantTurn.dataset.recycleKey=rawIdx;
       inner.appendChild(currentAssistantTurn);
     }
     const seg=document.createElement('div');
@@ -12346,6 +12424,7 @@ function renderMessages(options){
     }
   }
   _updateMessageVirtualMeasurements(renderVisWithIdx, renderVisibleIdxs, virtualWindow);
+  _recycleStash.clear();
 }
 
 function _toolDisplayName(tc){
