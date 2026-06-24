@@ -51,10 +51,10 @@ _CLI_SESSIONS_CACHE = {}
 # CLI-cache expiry, and on every sidebar poll, because the higher CLI cache is
 # keyed per active profile while the underlying transcripts never change between
 # switches. This cache memoizes the EXPENSIVE per-file parse result keyed by the
-# file's (resolved path, mtime_ns, size); a warm sidebar build then re-stats the
+# file's (path, mtime_ns, size, ctime_ns); a warm sidebar build then re-stats the
 # files (~4ms for 200) instead of re-parsing them. Any external edit/append to a
-# transcript changes mtime_ns/size and transparently invalidates just that one
-# file's entry. Bounded so a pathological projects tree can't grow it unbounded.
+# transcript changes mtime_ns/size/ctime_ns and transparently invalidates just
+# that one file's entry. Bounded so a pathological projects tree can't grow it unbounded.
 _CLAUDE_CODE_PARSE_CACHE_LOCK = threading.Lock()
 _CLAUDE_CODE_PARSE_CACHE: "collections.OrderedDict[tuple, tuple]" = collections.OrderedDict()
 _CLAUDE_CODE_PARSE_CACHE_MAX = 1000
@@ -3892,21 +3892,26 @@ def _parse_claude_code_jsonl(path: Path, *, max_messages: int = CLAUDE_CODE_MAX_
 def _parse_claude_code_jsonl_cached(
     path: Path, *, max_messages: int = CLAUDE_CODE_MAX_MESSAGES_PER_FILE
 ) -> tuple[list[dict], str | None, float | None, float | None]:
-    """``_parse_claude_code_jsonl`` memoized by the file's (path, mtime_ns, size).
+    """``_parse_claude_code_jsonl`` memoized by the file's (path, mtime_ns, size, ctime_ns).
 
     The transcript files under ``~/.claude/projects`` are global and rarely
     change between sidebar builds, but parsing them dominates the cold
     /api/sessions latency (and repeats on every profile switch). Caching the
     parse result keyed by the file's stat signature collapses the warm cost to a
     single ``os.stat`` per file. A genuine append/edit bumps ``mtime_ns``/``size``
-    and misses the cache, so staleness is impossible without re-parsing.
+    /``ctime_ns`` and misses the cache, so staleness is impossible without
+    re-parsing.
 
     ``max_messages`` is part of the key so a caller asking for a different cap
     never reads a result truncated to a smaller one.
     """
     try:
         st = path.stat()
-        key = (str(path), st.st_mtime_ns, st.st_size, int(max_messages))
+        # Key on mtime_ns + size + ctime_ns: size is the strong discriminator for
+        # append-only JSONL (any write changes it), and ctime_ns guards the rare
+        # same-size, same-mtime in-place edit so a content change can never serve
+        # a stale parse. A spurious ctime bump only costs one harmless re-parse.
+        key = (str(path), st.st_mtime_ns, st.st_size, st.st_ctime_ns, int(max_messages))
     except OSError:
         # Can't stat -> fall back to a direct (uncached) parse; it will also
         # likely fail and return the empty tuple, matching prior behavior.
@@ -4008,7 +4013,13 @@ def get_claude_code_sessions(projects_dir: Path | str | None = None, *, max_file
         if not messages:
             continue
         sid = _claude_code_session_id(path)
-        if first_ts is None and last_ts is None:
+        # Match the truthiness fallback used in the assignments below: the old
+        # inline code was ``first_ts or last_ts or path.stat().st_mtime``, which
+        # also fell back to mtime for a falsy-but-not-None ``0.0`` timestamp
+        # (epoch-0 / 1970 transcripts). An identity (``is None``) guard would
+        # leave those rows with ``None`` instead of the file mtime, so use the
+        # same ``not`` test the assignments use to stay bug-for-bug compatible.
+        if not first_ts and not last_ts:
             try:
                 _mtime = path.stat().st_mtime
             except OSError:
