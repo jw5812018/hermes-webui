@@ -438,6 +438,14 @@ let _messageVirtualScrollSettleTimer=0;
 let _messageVirtualDeferredMeasurement=null;
 let _msgNodeRecycleEnabled=false;
 const _recycleStash=new Map();
+const _recycleResetAttrs=[
+  'data-transparent-turn-collapsed',
+  'data-transparent-turn-toggle-bound',
+  'data-anchor-scene-live-owner',
+  'data-anchor-stream-id',
+  // Defensive reset for legacy/restored shells that may still carry the fallback live-turn marker.
+  'data-live-assistant-turn',
+];
 let _scrollbarDragActive=false;
 function _markMessageVirtualScrollActive(){
   _messageVirtualScrollActive=true;
@@ -3932,7 +3940,7 @@ if(typeof window!=='undefined'){
   const el=document.getElementById('messages');
   if(!el) return;
   el.addEventListener('pointerdown',(e)=>{
-    if(e.offsetX>=el.clientWidth) _scrollbarDragActive=true;
+    if(e.target===el&&e.offsetX>=el.clientWidth) _scrollbarDragActive=true;
   },{passive:true});
   window.addEventListener('pointerup',()=>{
     if(!_scrollbarDragActive) return;
@@ -11002,6 +11010,26 @@ function _restoreMessageScrollSnapshot(snapshot){
     else requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
   }
 }
+/**
+ * Mobile scroll-jank guard: temporarily re-enable overflow-anchor so the
+ * browser preserves scroll position across the innerHTML='' + DOM rebuild gap.
+ * Safari/Chrome on iOS/Android can paint a frame with scrollTop=0 between
+ * innerHTML='' and snapshot restore, scroll-janking the user to the top.
+ * Called from renderMessages() before the DOM wipe — not from streaming ticks,
+ * since CSS already gives overflow-anchor:auto on mobile via media query.
+ */
+window._fixMobileScrollJank=function _fixMobileScrollJank(){
+  const el=document.getElementById('messages');
+  if(!el) return;
+  // Desktop with a mouse: keep overflow-anchor:none (explicitly set by CSS).
+  // Mobile touch devices only: temporarily enable it.
+  if(window.matchMedia('(hover:hover) and (pointer:fine)').matches) return;
+  el.style.overflowAnchor='auto';
+  requestAnimationFrame(()=>{
+    if(el.style.overflowAnchor==='auto') el.style.overflowAnchor='';
+  });
+};
+
 function _restoreMessageScrollSnapshotSameFrame(snapshot){
   const el=$('messages');
   if(!el||!snapshot) return;
@@ -11236,6 +11264,11 @@ function renderMessages(options){
       _recycleStash.set(Number(key), child);
     }
   }
+  // Mobile scroll-jank fix: temporarily re-enable overflow-anchor so browser
+  // preserves scroll position across the DOM wipe-and-rebuild gap.
+  // Safari/Chrome on iOS/Android can paint a frame with scrollTop=0 between
+  // innerHTML='' and snapshot restore, scroll-janking the user to the top.
+  if(window._fixMobileScrollJank) window._fixMobileScrollJank();
   inner.innerHTML='';
   const compressionNode=compressionState?_compressionCardsNode(compressionState):null;
   const {message:referenceMessage, rawIdx:referenceMessageRawIdx}=_latestCompressionReferenceMessage(
@@ -11540,8 +11573,7 @@ function renderMessages(options){
       if(recycled){
         const blocks=_assistantTurnBlocks(recycled);
         if(blocks) blocks.innerHTML='';
-        recycled.removeAttribute('data-transparent-turn-collapsed');
-        recycled.removeAttribute('data-transparent-turn-toggle-bound');
+        for(const attr of _recycleResetAttrs) recycled.removeAttribute(attr);
         const role=recycled.querySelector('.msg-role.assistant');
         if(role) role.outerHTML=_assistantRoleHtml(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
         currentAssistantTurn=recycled;
