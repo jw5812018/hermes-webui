@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.634] — 2026-06-24 — Release WO (faster profile list — skill stats are cached with an mtime probe)
+
+### Fixed
+
+- **Opening the profile switcher / listing profiles is no longer slow when you have several profiles.** The profile list computed each profile's enabled/total skill counts by reading and parsing every `SKILL.md` on every request — with multiple profiles this added up to 100s+ of latency. The counts are now cached per profile and only recomputed when a cheap directory-mtime probe detects an actual change (a skill added, removed, edited, or `config.yaml` changed), with a periodic safety-net refresh. The probe walks the skill tree the same way the real scan does (following symlinked skills, pruning vendored dependency trees like `node_modules`/`.venv`), so the cached counts stay correct while the expensive re-parse is skipped. Thanks @rodboev. (#4847, closes #4783)
+
 ## [v0.51.633] — 2026-06-24 — Release WN (collapsed tool cards preview the result, not the call args)
 
 ### Fixed
