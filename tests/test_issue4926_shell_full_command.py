@@ -152,3 +152,22 @@ def test_password_redaction_still_works(driver_path):
     assert "hunter2" not in out["lead"]
     assert "topsecret" not in out["lead"]
     assert "[redacted]" in out["lead"]
+
+
+def test_url_query_redaction_preserves_command_tail(driver_path):
+    """#4926 gate: redacting a secret URL query param must NOT swallow the rest
+    of the URL (later params + closing quote). Regression for the env-assignment
+    regex over-matching `token=` inside a URL and eating the tail with \\S+."""
+    out = _run(driver_path, {"args": {"command": "curl 'https://x.com/cb?token=tok_leak&mode=debug&signature=sig_leak'"}})
+    lead = out["lead"]
+    assert "tok_leak" not in lead and "sig_leak" not in lead
+    # The non-secret param + closing quote must survive (no tail truncation).
+    assert "mode=debug" in lead
+    assert lead.rstrip().endswith("'")
+
+
+def test_benign_assignment_not_over_redacted(driver_path):
+    """A non-secret assignment like PATH= must not be mangled."""
+    out = _run(driver_path, {"args": {"command": "export PATH=/usr/bin:/bin\necho ok"}})
+    assert "/usr/bin:/bin" in out["lead"]
+    assert "echo ok" in out["lead"]
