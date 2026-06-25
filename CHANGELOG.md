@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.666] — 2026-06-25 — Release XV (command approvals work again on the local backend)
+
+### Fixed
+
+- **Command approvals work again on the default local backend (#4771 regression).** On the in-process WebUI chat runtime, clicking Approve/Deny on a guarded-command card failed with `Gateway approval could not be relayed because the active run is unavailable` (HTTP 409, `gateway_run_unavailable`) on every click — a regression from #4771 (v0.51.653), which surfaced that 409 for gateway approvals whose run had gone but emitted it regardless of backend. Local approvals have no gateway run by design, so the check always tripped. The 409 is now gated on the WebUI actually running the gateway chat backend; local approvals resolve in-process as before, and the gateway behavior is unchanged. Reported by b3nw and claw-io (#4948).
+
 ## [v0.51.665] — 2026-06-25 — Release XU (sidebar stops re-querying every poll during streaming)
 
 ### Fixed
