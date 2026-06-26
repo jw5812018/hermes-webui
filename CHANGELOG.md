@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.669] — 2026-06-26 — Release XY (set OpenAI priority service tier from the model picker)
+
+### Added
+
+- **The main-model advanced settings can now set the OpenAI priority service tier (`service_tier`), matching the CLI/gateway fast-mode path.** Previously the WebUI model picker had no way to opt a conversation into OpenAI's priority tier even though the agent's `/fast` path supported it. The Settings → main-model advanced panel now exposes a Service tier control (Default/off · Priority) for eligible OpenAI-family models; the choice persists and is forwarded on the request. Codex models are excluded (their transport doesn't accept `service_tier`, so the selector is hidden and the value is never forwarded/persisted for them), and non-OpenAI providers never receive it. Thanks @rodboev. (#4543, fixes #4536)
+
 ## [v0.51.668] — 2026-06-26 — Release XX (WebUI stays in sync after the Desktop app continues a session)
 
 ### Fixed
