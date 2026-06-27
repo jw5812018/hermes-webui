@@ -6168,6 +6168,7 @@ function _attachProjectQuickCreateButton(chip, project){
   btn.onclick=async(e)=>{
     stop(e);
     if(_newSessionInFlight){
+      // The initiating tap already owns the filter change and rollback path.
       await newSession(false,{project_id:project.project_id});
       return;
     }
