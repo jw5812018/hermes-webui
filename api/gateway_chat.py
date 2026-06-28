@@ -20,6 +20,7 @@ from api.config import (
     STREAM_REASONING_TEXT,
     _get_session_agent_lock,
     coerce_reasoning_effort_for_model,
+    gateway_approval_unavailable_reason,
     gateway_supports_approval,
     register_active_run,
     unregister_active_run,
@@ -653,13 +654,19 @@ def _run_gateway_chat_streaming(
         else:
             # Legacy gateway path: emit unsupported approval notice once per session,
             # but only when the gateway genuinely lacks approval capability.
-            if not gateway_supports_approval(base_url, api_key):
+            approval_reason = gateway_approval_unavailable_reason(base_url, api_key)
+            if approval_reason is not None:
                 if not hasattr(s, "_approval_notice_emitted"):
                     s._approval_notice_emitted = False
                 if not s._approval_notice_emitted:
+                    approval_message = "Approvals require a newer gateway. Upgrade the connected Hermes gateway to enable this."
+                    approval_type = "approval_gateway_unsupported"
+                    if approval_reason == "unreachable":
+                        approval_type = "approval_gateway_offline"
+                        approval_message = "Gateway connection failed. Check that the connected Hermes gateway is running and reachable."
                     put_gateway_event("warning", {
-                        "type": "approval_gateway_unsupported",
-                        "message": "Approvals require a newer gateway. Upgrade the connected Hermes gateway to enable this.",
+                        "type": approval_type,
+                        "message": approval_message,
                     })
                     s._approval_notice_emitted = True
 
