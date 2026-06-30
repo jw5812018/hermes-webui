@@ -4437,6 +4437,21 @@ def _get_or_materialize_session(sid: str):
         # below (and the heuristic record-check would mis-trip on mock sessions).
         if getattr(s, "read_only", False):
             raise PermissionError("read-only imported session")
+        if getattr(s, "is_cli_session", False):
+            latest_messages = get_cli_session_messages(
+                sid,
+                profile=getattr(s, "profile", None),
+            )
+            current_messages = list(getattr(s, "messages", None) or [])
+            if (
+                latest_messages
+                and len(latest_messages) >= len(current_messages)
+                and _session_messages_have_prefix(latest_messages, current_messages)
+            ):
+                # Keep the stitched CLI transcript authoritative on the first
+                # WebUI continuation path without clobbering later divergent
+                # WebUI-owned turns.
+                s.messages = list(latest_messages)
         return s
     except KeyError:
         pass
@@ -7559,6 +7574,7 @@ from api.models import (
     _active_stream_ids,
     _merge_session_display_metadata,
     _session_message_merge_key,
+    _session_messages_have_prefix,
     _session_message_visible_key,
     _message_timestamp_as_float,
     _is_empty_partial_activity_message,
