@@ -35,6 +35,9 @@
 
 ### Fixed
 
+- **A server-initiated turn that finished during an SSE gap now renders correctly on a visible-tab wake.** When a tab regained focus after the SSE stream had a gap, a self-heal reload could clobber a concurrent same-session `server_turn_started`, losing live-render ownership. The active stream id is now re-read after the awaited message load and scoped to the same session, so a concurrent same-session stream is honored by the attach/idle decision. The original SSE-gap self-heal (metadata-only server-ahead, in-place replace, no jump) is intact. Thanks @allenliang2022. (#5248)
+- **The latest assistant response now carries a single accessible landmark, only once it has settled.** The "Latest Hermes response" landmark is no longer applied to an actively-streaming turn (only the latest settled turn gets it), giving screen-reader users one stable, correctly-placed landmark. Thanks @sheldon-im. (#5207)
+
 - **A just-settled Compact Worklog now stays open for an unpinned reader instead of jumping.** When a streaming turn settled, the worklog could collapse-jump for a reader who wasn't pinned to the bottom; the disarm path now collapse-renders consistently for both pinned and unpinned readers (one frame, height-stable swap), so there's no post-settle scroll jump on mobile. No cache leak, and no #4970 regression. Thanks @allenliang2022. (#5260)
 - **The sidebar source filter now offers Webhooks parity with Cron Jobs.** Adds a `show_webhook_sessions` toggle threaded through the session-list cache key + builder and a localized checkbox, so webhook-origin sessions can be filtered like cron sessions. Preserves the archived-row paging behavior. Thanks @MaudeBot. (#4957, closes #4956)
 
