@@ -1807,6 +1807,39 @@ function _isExternalSession(session) {
   return !!(session.is_cli_session || _isMessagingSession(session));
 }
 
+/**
+ * Returns true when a session is a delegated subagent child (delegate_task
+ * spawns these with source='subagent' in Hermes state.db). These children
+ * usually have no WebUI sidecar of their own — their transcript lives only in
+ * state.db — so opening one must run the same server-side import/merge path
+ * that CLI/messaging sessions use, even though they are not _isExternalSession
+ * (their normalized session_source is 'other', not cli/messaging). Without
+ * this the child pane loads empty despite state.db carrying messages (#5307).
+ */
+function _isSubagentChildSession(session) {
+  if (!session) return false;
+  const src = (
+    session.session_source
+    || session.raw_source
+    || session.source_tag
+    || session.source
+    || session.source_label
+    || ''
+  ).toString().toLowerCase();
+  return src === 'subagent';
+}
+
+/**
+ * Sessions that need a server-side import/materialize before the WebUI can
+ * read a full transcript: external channels (CLI/messaging) plus delegated
+ * subagent children (#5307). Kept separate from _isExternalSession so the
+ * active-session refresh/force-reload gating that keys on _isExternalSession
+ * is not widened by this classification.
+ */
+function _sessionNeedsServerImportForLoad(session) {
+  return _isExternalSession(session) || _isSubagentChildSession(session);
+}
+
 function _externalImportPayload(session) {
   const payload = {session_id: session.session_id};
   if (_showAllProfiles && session && typeof session.profile === 'string' && session.profile) {
@@ -6911,7 +6944,7 @@ function renderSessionListFromCache(){
         row.title=t('session_lineage_segment_open');
         row.onclick=async(e)=>{
           e.stopPropagation();
-          if(_isExternalSession(seg)){
+          if(_sessionNeedsServerImportForLoad(seg)){
             try{await api('/api/session/import_cli',{method:'POST',body:JSON.stringify(_externalImportPayload(seg))});}
             catch(_e){ /* read-only fallback */ }
           }
@@ -6928,7 +6961,7 @@ function renderSessionListFromCache(){
       ['pointerdown','pointerup','click','touchstart','touchmove','touchend','touchcancel'].forEach(ev=>childList.addEventListener(ev,e=>e.stopPropagation()));
       const sortedChildren=[...s._child_sessions].sort((a,b)=>_sessionTimestampMs(b)-_sessionTimestampMs(a));
       const openChildSession=async(childSession)=>{
-        if(_isExternalSession(childSession)){
+        if(_sessionNeedsServerImportForLoad(childSession)){
           try{await api('/api/session/import_cli',{method:'POST',body:JSON.stringify(_externalImportPayload(childSession))});}
           catch(_e){ /* read-only fallback */ }
         }
@@ -7555,9 +7588,12 @@ function renderSessionListFromCache(){
         _tapTimer=null;
         _lastTapTime=0;
         if(_renamingSid) return;
-        // For external sessions (CLI, Discord, Telegram, Slack), import into
-        // WebUI store first so /api/chat/start finds a persisted session.
-        if(_isExternalSession(s)){
+        // For external sessions (CLI, Discord, Telegram, Slack) and delegated
+        // subagent children, import into WebUI store first so /api/chat/start
+        // (and the transcript load) finds a persisted/merged session. Subagent
+        // children (source='subagent') live only in state.db and would
+        // otherwise open to an empty pane (#5307).
+        if(_sessionNeedsServerImportForLoad(s)){
           try{
             await api('/api/session/import_cli',{method:'POST',body:JSON.stringify(_externalImportPayload(s))});
           }catch(e){ /* import failed -- fall through to read-only view */ }

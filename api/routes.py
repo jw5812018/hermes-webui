@@ -6563,6 +6563,45 @@ def _session_index_marks_was_webui(sid: str) -> bool:
     return False
 
 
+def _state_db_session_source(sid: str) -> str:
+    """Return the lowercased ``sessions.source`` for ``sid`` from state.db.
+
+    Cheap single-row lookup used to distinguish delegated ``subagent`` children
+    (which have a recoverable state.db transcript) from genuinely-deleted WebUI
+    sessions.  Returns "" on any error / missing row so callers fall back to
+    their existing behaviour.
+    """
+    if not sid or not is_safe_session_id(sid):
+        return ""
+    try:
+        from api.models import _active_state_db_path
+        db_path = _active_state_db_path()
+        if not db_path or not Path(db_path).exists():
+            return ""
+        import sqlite3 as _sqlite
+        with closing(_sqlite.connect(str(db_path))) as _conn:
+            row = _conn.execute(
+                "SELECT source FROM sessions WHERE id = ?", (sid,)
+            ).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    return str(row[0] or "").strip().lower()
+
+
+def _is_subagent_child_session_id(sid: str) -> bool:
+    """Return True when ``sid`` is a delegated subagent child in state.db.
+
+    Delegated ``delegate_task`` children are recorded in Hermes state.db with
+    ``source='subagent'`` and a ``parent_session_id``. They frequently have no
+    WebUI sidecar (they ran server-side), so opening one from the sidebar must
+    recover the transcript from state.db rather than 404 as a deleted WebUI
+    session (#5307).
+    """
+    return _state_db_session_source(sid) == "subagent"
+
+
 def _is_claimable_cli_source(cli_meta: dict, state_db_source: str = "") -> tuple[bool, str]:
     """Decide whether a foreign-origin session is safe to claim writeable
     in WebUI. Returns ``(claimable, reason_if_not)``.
@@ -6728,7 +6767,13 @@ def _claim_or_synthesize_cli_session(sid: str, cli_meta: dict = None):
 
     if not is_safe_session_id(sid):
         return None, "invalid_sid"
-    if _session_index_marks_was_webui(sid):
+    if _session_index_marks_was_webui(sid) and not _is_subagent_child_session_id(sid):
+        # A delegated subagent child (source='subagent' in state.db) can be
+        # registered in the WebUI index as a webui/fork/blank-source row (it
+        # shares the parent's lineage) yet have no WebUI sidecar of its own.
+        # Those must recover their transcript from state.db below rather than
+        # 404 as a genuinely-deleted WebUI session (#5307). Every other
+        # index-marked-WebUI id keeps the #2782 self-heal 404 contract.
         return None, "was_webui"
     if cli_meta is None:
         cli_meta = _lookup_cli_session_metadata(sid) or {}
