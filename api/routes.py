@@ -1793,6 +1793,221 @@ def __getattr__(name):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def _prune_orphaned_webui_zero_message_sessions(rows, *, diag_stage=None):
+    """#4985 second-pass orphan prune for native-WebUI rows whose ``state.db.messages`` is empty.
+
+    Takes the post-``#3238`` ``webui_sessions`` list (i.e. rows that already
+    survived the #3238/#4591 CLI/API-server prune) and returns a NEW list with
+    any row whose backing ``state.db.messages`` table is empty removed.
+    Removed sids are also persisted to the tombstone via
+    ``_record_webui_zero_message_orphan_tombstone`` so
+    ``recover_missing_index_sidecars`` does not re-add them to the sidebar
+    index on the next poll (avoids the cache-thrash loop where every poll
+    does one fsync'd index write + one state.db probe per orphan, forever).
+
+    Invariants preserved:
+
+    - Rows with ``active_stream_id`` / ``has_pending_user_message`` /
+      ``worktree_path`` set are NEVER pruned — the inflight / worktree-bound
+      / pending safety contract from ``IC_kwDOR1LuPM8AAAABHrkF1Q``.
+    - Rows whose ``state.db.messages`` is empty AND that survived the
+      upstream ``all_sessions()`` ``#1171`` keep-filter (i.e. titled OR has
+      positive ``message_count``) ARE pruned — the post-#1171-survivor
+      shape #4985 actually describes (a row that lingers VISIBLY in the
+      sidebar because of a stale positive ``message_count`` or a title set
+      before the first turn committed).
+
+    This helper is intentionally extracted out of the ``if show_cli_sessions:``
+    branch so the prune fires in BOTH branches of
+    ``_build_session_list_cache_payload``. Established installs have
+    ``settings.show_cli_sessions`` pinned to ``False`` (per
+    ``api/config.py:7637-7648``) and those are exactly the long-time users
+    who have accumulated the #4985 404 orphans — without hoisting, the
+    ``else:`` branch silently skipped the prune and the sidebar kept
+    dangling rows that 404 on click (review
+    ``IC_kwDOR1LuPM8AAAABHsyFGg``).
+    """
+    if not rows:
+        return list(rows) if rows is not None else []
+    _diag = diag_stage if callable(diag_stage) else (lambda *_a, **_k: None)
+    # #4985 self-healing: the tombstone is NOT a blind-drop filter at the
+    # top of the helper. A row whose sid is in the tombstone is allowed
+    # into the gate predicate like any other row — and the post-probe
+    # logic below explicitly distinguishes four cases:
+    #
+    #   1. probe says NOT empty AND sid IS tombstoned → SELF-HEAL: the row
+    #      has actually gained messages, so clear the tombstone and keep
+    #      the row (do NOT add to missing_webui_orphan_ids). This is the
+    #      primary fix for review IC_kwDOR1LuPM8AAAABHvY-dw.
+    #   2. probe says empty AND sid IS tombstoned → tombstone persists
+    #      (orphan shape unchanged), but the row is excluded from the
+    #      returned list so the tombstone continues to suppress it on
+    #      this poll too. Do NOT redundantly prune+tombstone (would
+    #      cycle).
+    #   3. probe says empty AND sid is NOT tombstoned → new orphan: prune
+    #      from index, record tombstone, diag_stage.
+    #   4. probe says NOT empty AND sid is NOT tombstoned → row has
+    #      messages, retain (gate already passes anyway).
+    #
+    # A blind-drop at the top (the previous behavior) is strictly worse
+    # than the orphan it suppresses — it would silently swallow a
+    # legitimately-resurfaced row forever, even after the user actually
+    # sent messages. The self-healing case is what makes the tombstone a
+    # recoverable "this sid is currently empty" signal rather than a
+    # permanent hide-list.
+    if not rows:
+        return []
+    # Gate predicate mirrors the inline block that lived here before the
+    # helper extract. The (title!='Untitled' OR count>0) clause is what makes
+    # this gate actually reach a row #1171 kept — without it, the gate is a
+    # no-op because ``all_sessions()`` at ``api/models.py:3892-3898`` (and
+    # its full-scan fallback at 3946-3952) has already stripped every
+    # (Untitled ∧ count==0 ∧ ¬active_stream_id ∧ ¬has_pending_user_message ∧
+    # ¬worktree_path) row before our prune block runs.
+    _webui_orphan_probe_rows = [
+        s for s in rows
+        if _session_source_is_webui(s)
+        and not s.get("active_stream_id")
+        and not s.get("has_pending_user_message")
+        and not s.get("worktree_path")
+        and (
+            s.get("title", "Untitled") != "Untitled"
+            or _numeric_count(s.get("message_count")) > 0
+        )
+    ]
+    if not _webui_orphan_probe_rows:
+        return list(rows)
+    rows_by_profile_webui: dict[object, list[dict]] = defaultdict(list)
+    for row in _webui_orphan_probe_rows:
+        rows_by_profile_webui[row.get("profile")].append(row)
+    _tombstoned = _load_webui_zero_message_orphan_tombstone()
+    self_healed_ids: set[str] = set()
+    missing_webui_orphan_ids: set[str] = set()
+    still_hidden_ids: set[str] = set()
+    for profile_key, profile_rows in rows_by_profile_webui.items():
+        probe_ids = [
+            str(row.get("session_id")).strip()
+            for row in profile_rows
+            if str(row.get("session_id") or "").strip()
+        ]
+        zero_message_sids = agent_session_zero_message_sids(
+            probe_ids,
+            profile=profile_key if isinstance(profile_key, str) and profile_key else None,
+        )
+        # Iterate over the actual rows (not just probe_ids) so each sid
+        # decision can probe the sidecar for real ``messages``. The r5
+        # signal keyed off the row's cached ``message_count`` (which is
+        # stale-positive on the very phantom rows #4985 exists to prune:
+        # sidecar ``messages`` empty but cached count > 0), so the r5
+        # retain branch kept the phantom and re-opened the bug (maintainer
+        # review 4584722701, supersedes the r5 cached-count signal). The
+        # r6 signal probes ``Session.load(sid).messages`` directly — but
+        # ONLY for ``state.db``-empty candidates (the small set; the
+        # common live-row path takes the ``else`` branch and pays
+        # nothing). Full ``Session.load`` is intentional (vs
+        # ``load_metadata_only`` which zeroes the messages array at
+        # ``api/models.py:1210``).
+        for row in profile_rows:
+            sid = str(row.get("session_id") or "").strip()
+            if not sid:
+                continue
+            is_empty = sid in zero_message_sids
+            is_tombstoned = sid in _tombstoned
+            if is_empty:
+                # ``state.db.messages`` is empty. Probe the sidecar JSON
+                # for real messages — the cached ``message_count`` alone
+                # is stale-positive on phantom rows (sidecar ``messages``
+                # empty but cached count > 0) and would retain the very
+                # phantom this feature exists to prune (maintainer review
+                # 4584722701, supersedes the r5 cached-count signal).
+                # Full ``Session.load`` is intentional (vs
+                # ``load_metadata_only`` which zeros the messages array
+                # at ``api/models.py:1210``); the common live-row path
+                # pays nothing because it skips the load via the
+                # ``else`` branch below.
+                try:
+                    from api.models import Session as _Session
+                    _loaded = _Session.load(sid)
+                    sidecar_has_messages = bool(
+                        _loaded is not None and len(_loaded.messages or []) > 0
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to load sidecar for webui orphan decision %s; "
+                        "treating as empty for prune purposes",
+                        sid,
+                        exc_info=True,
+                    )
+                    sidecar_has_messages = False
+            else:
+                # ``state.db.messages`` is non-empty — the conversation is real.
+                sidecar_has_messages = True
+            if sidecar_has_messages:
+                # Real transcript (state.db OR loaded sidecar). Retain; if
+                # tombstoned, self-heal so it stops thrashing on recovery.
+                if is_tombstoned:
+                    self_healed_ids.add(sid)
+                continue
+            if not is_empty and is_tombstoned:
+                # Case 1: SELF-HEAL — clear tombstone, keep row.
+                self_healed_ids.add(sid)
+            elif is_empty and is_tombstoned:
+                # Case 2: still-empty tombstoned row stays hidden this
+                # poll (do not add to missing_webui_orphan_ids — would
+                # cycle through prune_session_from_index + record).
+                still_hidden_ids.add(sid)
+            elif is_empty and not is_tombstoned:
+                # Case 3: new orphan.
+                missing_webui_orphan_ids.add(sid)
+            # Case 4 (not empty + not tombstoned): row has messages, retain.
+    if self_healed_ids:
+        for _sid in self_healed_ids:
+            try:
+                _clear_webui_zero_message_orphan_tombstone(_sid)
+                logger.debug(
+                    "self-heal: cleared webui zero-message orphan tombstone "
+                    "for %s (state.db.messages now non-empty)",
+                    _sid,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to clear webui zero-message orphan tombstone for %s",
+                    _sid,
+                    exc_info=True,
+                )
+        _diag("self_heal_webui_zero_message_orphan")
+    if missing_webui_orphan_ids:
+        for _sid in missing_webui_orphan_ids:
+            try:
+                prune_session_from_index(_sid)
+                _diag("prune_orphaned_webui_zero_message")
+            except Exception:
+                logger.debug(
+                    "Failed to prune orphaned webui zero-message row %s",
+                    _sid,
+                    exc_info=True,
+                )
+            # Tombstone the sid in a SECOND step so a tombstone-write failure
+            # never blocks the prune itself (the prune still removes the row
+            # from the sidebar; only the re-prune avoidance would degrade).
+            try:
+                _record_webui_zero_message_orphan_tombstone(_sid)
+            except Exception:
+                logger.debug(
+                    "Failed to tombstone webui zero-message orphan %s",
+                    _sid,
+                    exc_info=True,
+                )
+    # Return rows excluding both the freshly-pruned orphans AND the
+    # tombstoned rows that the probe confirmed are still empty (case 2).
+    # Self-healed rows (case 1) and live rows (case 4) stay in the result.
+    _hidden = missing_webui_orphan_ids | still_hidden_ids
+    return [
+        s for s in rows
+        if str(s.get("session_id") or "").strip() not in _hidden
+    ]
+
+
 def _build_session_list_cache_payload(
     active_profile: str | None,
     all_profiles: bool,
@@ -1879,7 +2094,17 @@ def _build_session_list_cache_payload(
         # CLI_VISIBLE_SESSION_LIMIT (20) — an existing session can fall
         # out of that window and look deleted. Native WebUI sessions
         # (source == "webui") that merely have a CLI ancestor are never
-        # pruned.
+        # pruned by this path.
+        #
+        # #4985: parallel pass for native-WebUI rows that have a backing
+        # agent row in state.db but zero messages (a `+`-click that opened a
+        # row but the first turn never committed, or a sidebar nav that
+        # opened then closed before any message landed). The same #3238
+        # helper doesn't catch these because source == "webui" is excluded
+        # above, and the WebUI delete affordance isn't exposed for them,
+        # so they would otherwise linger forever. Inflight first-turn
+        # safety is preserved by gating on `active_stream_id` (after
+        # _reconcile_stale_stream_state has cleared stale stream ids).
         _orphan_probe_rows = []
         _kept_after_orphan_prune = []
         for s in webui_sessions:
@@ -1926,7 +2151,41 @@ def _build_session_list_cache_payload(
                     diag_stage("prune_orphaned_agent_sidecar")
                     continue
                 _kept_after_orphan_prune.append(s)
-        webui_sessions = _kept_after_orphan_prune
+        # #4985 second pass — probe state.db.messages for native-WebUI rows
+        # that *survived* the upstream all_sessions() #1171 keep-filter (so
+        # the row is TITLED or has a POSITIVE message_count, meaning it IS
+        # shown in the sidebar — and the 404 click reported in #4985 happens),
+        # BUT whose actual state.db.messages table is empty (the ground-truth
+        # probe). This is the orphan shape #4985 actually describes: a row
+        # that lingers VISIBLY in the sidebar because of a stale positive
+        # message_count or a title set before the first turn committed.
+        #
+        # The (title!='Untitled' OR count>0) clause is the part that makes
+        # this gate actually reach a row #1171 kept. Without it, the gate is
+        # a no-op because all_sessions() at api/models.py:3892-3898 and
+        # 3946-3952 has already stripped every (Untitled ∧ count==0 ∧
+        # ¬active_stream_id ∧ ¬has_pending_user_message ∧ ¬worktree_path)
+        # row before this point — making the earlier 6-condition gate a
+        # no-op against the real pipeline (review IC_kwDOR1LuPM8AAAABHrkF1Q).
+        #
+        # Implementation lives in ``_prune_orphaned_webui_zero_message_sessions``
+        # above so the prune runs in BOTH branches of this function
+        # (``if show_cli_sessions:`` AND ``else:``). Established installs
+        # have ``settings.show_cli_sessions`` pinned to False (per
+        # api/config.py:7637-7648) and those are exactly the long-time
+        # users who accumulated the #4985 404 orphans — without hoisting,
+        # the ``else:`` branch silently skipped the prune
+        # (review IC_kwDOR1LuPM8AAAABHsyFGg).
+        #
+        # Inflight / worktree / pending safety: same as before — any row
+        # still carrying active_stream_id / has_pending_user_message /
+        # worktree_path is never pruned, even if its messages table is
+        # momentarily empty. _reconcile_stale_stream_state_for_session_rows
+        # at line 2224 has already cleared stale stream ids above this point.
+        webui_sessions = _prune_orphaned_webui_zero_message_sessions(
+            _kept_after_orphan_prune,
+            diag_stage=diag_stage,
+        )
         for s in webui_sessions:
             meta = cli_by_id.get(s.get("session_id"))
             if not meta:
@@ -1955,6 +2214,18 @@ def _build_session_list_cache_payload(
     else:
         diag_stage("filter_webui_sessions")
         webui_sessions = [s for s in webui_sessions if not _is_cli_session_for_settings(s)]
+        # #4985 second pass — see _prune_orphaned_webui_zero_message_sessions
+        # for the gate predicate and the post-#1171-survivor rationale. The
+        # prune MUST run here too: established installs have
+        # ``settings.show_cli_sessions`` pinned to False
+        # (api/config.py:7637-7648) and those are exactly the long-time
+        # users who accumulated the 404 orphans — review
+        # IC_kwDOR1LuPM8AAAABHsyFGg. Without this call the else branch
+        # silently skipped the prune and the sidebar kept dangling rows.
+        webui_sessions = _prune_orphaned_webui_zero_message_sessions(
+            webui_sessions,
+            diag_stage=diag_stage,
+        )
         deduped_cli = []
     diag_stage("sort_sessions")
     merged = webui_sessions + deduped_cli
@@ -7598,6 +7869,10 @@ from api.models import (
     _hide_from_default_sidebar,
     prune_session_from_index,
     agent_session_rows_existing,
+    agent_session_zero_message_sids,
+    _load_webui_zero_message_orphan_tombstone,
+    _record_webui_zero_message_orphan_tombstone,
+    _clear_webui_zero_message_orphan_tombstone,
     ensure_cron_project,
     is_cron_session,
     is_safe_session_id,
