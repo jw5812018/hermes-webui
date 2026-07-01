@@ -19367,10 +19367,7 @@ def _handle_chat_start(handler, body, diag=None):
             if "model_provider" in body
             else getattr(s, "model_provider", None)
         )
-<<<<<<< ours
         _pp_provider, _pp_default, _pp_cfg = _read_profile_model_config(s, requested_provider)
-=======
->>>>>>> theirs
         explicit_model_pick = bool(body.get("explicit_model_pick"))
         moa_config = None
         gateway_chat_enabled = webui_gateway_chat_enabled(get_config())
@@ -19383,7 +19380,6 @@ def _handle_chat_start(handler, body, diag=None):
                 moa_config = resolve_moa_config()
             except RuntimeError as e:
                 return bad(handler, str(e), 503)
-        _pp_provider, _pp_default = _read_profile_model_config(s, requested_provider)
         diag.stage("resolve_model_provider") if diag else None
         model, model_provider, normalized_model = _resolve_compatible_session_model_state(
             requested_model,
