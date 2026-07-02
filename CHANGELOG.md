@@ -5,11 +5,13 @@
 
 ### Fixed
 
+- **The sidebar recovers on its own after a brief server blip during a profile switch.** If the backend returned a transient 502/503/504 (e.g. an nginx→backend restart window) on a warm session-list refresh — a profile switch, tab focus, or reconnect — the sidebar gave up on the first try and sat on the previous profile's list until you hard-reloaded. The idempotent session-list fetch now retries those transient upstream statuses on every refresh (not just the first cold load), so it heals itself without a Ctrl+F5. Thanks @weidzhou for the report and root-cause. (#5394)
 - **The sidebar no longer conjures a phantom "Cron Jobs" project you never asked for.** When you had no projects of your own, opening the sidebar source filter (or importing CLI sessions) would silently mint a "Cron Jobs" project just to group cron rows — cluttering a filter you'd never opted into. Cron sessions now stay as ordinary ungrouped rows (still visible in the sidebar and origin filter) until you actually create a project; an existing "Cron Jobs" project keeps resolving exactly as before, so nothing changes for anyone already using one. Thanks @rodboev. (#5398, #5379)
 - **The composer footer shows your model and workspace names again on desktop.** The Export-to-HTML button added to the composer footer in the previous release pushed the control row past its width budget, which collapsed the footer into icon-only mode and hid the model / workspace / profile text labels. The export button has been removed from the composer footer (export remains available from Settings), so the labels are visible again.
 
 ### Added
 
+- **The post-update "What's New" summary now has an Expand control.** The update banner's generated summary defaults to a compact scrollable box; a new "Expand summary" toggle grows it to a much taller view (up to ~75% of the window height, ~82% on mobile) so you can read a long changelog without scrolling inside a cramped panel, then collapse it back. Thanks @nankingjing. (#5209, #4705)
 - **Export a conversation to a self-contained, theme-matched HTML file.** From a session you can now download a single standalone `.html` of the transcript with the current theme's palette baked in — no external resource loads (fully offline/portable), messages rendered as escaped text (no script/style/raw-HTML injection from conversation content), and remote images neutralized. Thanks @brick-hard. (#4968)
 
 ### Fixed
