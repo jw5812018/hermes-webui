@@ -1041,6 +1041,28 @@ def test_messages_js_live_assistant_segment_reuses_live_turn_wrapper(cleanup_tes
         "token handler must only create the live answer segment once visible answer text starts"
 
 
+def test_messages_js_stream_perf_cleanup_lifecycle(cleanup_test_sessions):
+    """#5455 review: throttled snapshot timers and incremental anchor caches tear down at terminal events."""
+    src = (REPO_ROOT / "static/messages.js").read_text()
+    assert "function _cancelThrottledSnapshotTimer()" in src
+    assert "clearTimeout(_snapshotLiveTurnTimer)" in src
+    assert "function _clearAnchorProseIncrementalNode()" in src
+    assert "window.__anchorProseIncrementalNode===_anchorProseIncrementalNode" in src
+    assert "_anchorProseSmdCache.clear();" in src
+    fallback_start = src.find("function _finalizeStreamEndFallback")
+    recovery_start = src.find("async function _runStreamEndRecovery", fallback_start)
+    assert fallback_start >= 0 and recovery_start > fallback_start
+    fallback_body = src[fallback_start:recovery_start]
+    assert "_cancelThrottledSnapshotTimer();" in fallback_body
+    assert "_clearAnchorProseIncrementalNode();" in fallback_body
+    done_start = src.find("source.addEventListener('done'")
+    stream_end_start = src.find("source.addEventListener('stream_end'", done_start)
+    assert done_start >= 0 and stream_end_start > done_start
+    done_body = src[done_start:stream_end_start]
+    assert "_cancelThrottledSnapshotTimer();" in done_body
+    assert "_clearAnchorProseIncrementalNode();" in done_body
+
+
 def test_messages_js_finalizes_thinking_card_before_tool_card(cleanup_test_sessions):
     """R19e: later reasoning after a tool call must render in a fresh Worklog
     Thinking Card without discarding durable reasoning.

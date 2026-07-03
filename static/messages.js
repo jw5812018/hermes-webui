@@ -2133,6 +2133,9 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     if(_snapshotLiveTurnTimer) return;
     _snapshotLiveTurnTimer=setTimeout(()=>{_snapshotLiveTurnTimer=null;snapshotLiveTurn();},700);
   }
+  function _cancelThrottledSnapshotTimer(){
+    if(_snapshotLiveTurnTimer){clearTimeout(_snapshotLiveTurnTimer);_snapshotLiveTurnTimer=null;}
+  }
   // Throttled variant for token-by-token updates. persistInflightState()
   // calls saveInflightState() which does JSON.parse + JSON.stringify + write
   // on the entire inflight map every call. On a fast model at 60 tok/s with
@@ -2178,6 +2181,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
   function _finalizeStreamEndFallback(source){
     _clearStreamEndRecovery();
     if(_persistTimer){clearTimeout(_persistTimer);_persistTimer=null;}
+    _cancelThrottledSnapshotTimer();
     _terminalStateReached=true;
     _streamFinalized=true;
     _cancelAnimationFramePendingStreamRender();
@@ -2189,6 +2193,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     _clearStreamNotificationBackground(activeSid, streamId);
     _flushReasoningToAnchor();
     _scheduleAnchorRegistryCleanup();
+    _clearAnchorProseIncrementalNode();
     _clearApprovalForOwner();
     _clearClarifyForOwner('terminal');
     if(_isActiveSession()){
@@ -3567,6 +3572,10 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     }
   }
   window.__anchorProseIncrementalNode=_anchorProseIncrementalNode;
+  function _clearAnchorProseIncrementalNode(){
+    if(typeof window!=='undefined'&&window.__anchorProseIncrementalNode===_anchorProseIncrementalNode) window.__anchorProseIncrementalNode=null;
+    _anchorProseSmdCache.clear();
+  }
   function _anchorHasReasoningEvents(){
     const events=_anchorActivityEvents();
     return !!(events&&events.some(event=>event&&event.source_event_type==='reasoning'));
@@ -5084,6 +5093,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
       _streamFinalized=true;
       _terminalStateReached=true;
       if(_persistTimer){clearTimeout(_persistTimer);_persistTimer=null;}
+      _cancelThrottledSnapshotTimer();
       const _doneData=JSON.parse(e.data);
       const _doneEvent=e;
       const _finishDone=()=>{
@@ -5115,6 +5125,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           created_at:d.created_at||null,
         },_doneEvent);
         _scheduleAnchorRegistryCleanup();
+        _clearAnchorProseIncrementalNode();
         const isActiveSession=_isSessionCurrentPane(activeSid);
         const isSessionViewed=_isSessionActivelyViewed(activeSid);
         const completedSession=d.session||{session_id:activeSid};
