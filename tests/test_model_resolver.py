@@ -813,3 +813,35 @@ def test_providers_scan_copilot_list_shape_also_skipped_5511():
         f"Copilot (list shape) must not hijack routing; got {provider!r}"
     )
     assert model == 'gpt-5'
+
+
+def test_providers_scan_honors_active_provider_ownership_5511():
+    """When the active provider owns the model (it's the configured default),
+    another provider's overlapping providers.<slug>.models entry must NOT hijack
+    routing away from the active provider (#5511 gate finding — active ai-gateway
+    + default gpt-5 was being pulled to providers.openai.models.gpt-5)."""
+    model, provider, base_url = _resolve_with_providers(
+        'gpt-5',
+        {'openai': {'models': ['gpt-5']}},
+        provider='ai-gateway',
+        default='gpt-5',
+    )
+    assert provider == 'ai-gateway', (
+        "active provider that owns the default model must keep routing; "
+        f"gpt-5 must stay on ai-gateway, got {provider!r}"
+    )
+    assert model == 'gpt-5'
+
+
+def test_providers_scan_active_provider_own_entry_still_matches_5511():
+    """The ownership guard still lets the ACTIVE provider's own providers: entry
+    match (e.g. active myprov + a model in providers.myprov.models resolves to
+    myprov with its base_url)."""
+    model, provider, base_url = _resolve_with_providers(
+        'gpt-5',
+        {'myprov': {'base_url': 'https://my.example/v1', 'models': ['gpt-5']}},
+        provider='myprov',
+        default='gpt-5',
+    )
+    assert provider == 'myprov', f"active provider's own entry must match; got {provider!r}"
+    assert base_url == 'https://my.example/v1'

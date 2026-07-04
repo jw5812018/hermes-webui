@@ -2569,6 +2569,15 @@ def resolve_model_provider(model_id: str) -> tuple:
     providers_cfg = cfg.get('providers', {})
     if isinstance(providers_cfg, dict):
         target = model_id.strip()
+        # Honor the same active/default ownership guard as the custom_providers
+        # scan (_skip_custom_providers, config.py:2535): when the active provider
+        # explicitly owns this model (it's the configured default or in the
+        # active provider's model set), another provider's overlapping
+        # `providers.<slug>.models` entry must NOT hijack routing away from the
+        # active provider (#5511 gate finding — e.g. active ai-gateway + default
+        # gpt-5 was being pulled to providers.openai.models.gpt-5). In that case
+        # restrict the scan to the active provider's own canonical slug.
+        _active_slug = _canonicalise_provider_id(config_provider) if config_provider else ""
         for slug, pdef in providers_cfg.items():
             if not isinstance(pdef, dict):
                 continue
@@ -2578,6 +2587,10 @@ def resolve_model_provider(model_id: str) -> tuple:
             # Scanning it here would let a Copilot per-model settings entry
             # hijack that model's routing away from its real provider (#5511).
             if _canonicalise_provider_id(slug) == "copilot":
+                continue
+            # Ownership guard: when the active provider owns this model, only its
+            # own providers: entry may match; skip all other slugs.
+            if _skip_custom_providers and _canonicalise_provider_id(slug) != _active_slug:
                 continue
             p_models = pdef.get('models')
             if isinstance(p_models, list):
