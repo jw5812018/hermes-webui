@@ -91,18 +91,39 @@ class TestEndpointDistinction:
         )
 
     def test_rfc_cites_current_global_endpoint_source(self):
+        """The RFC's source anchors for the existing global stream must be
+        ACCURATE against current api/routes.py — verify the cited lines actually
+        contain what the RFC claims, rather than string-matching a fixed number
+        (which silently rots and codifies wrong anchors, #5513 gate finding)."""
+        import re
         text = _rfc()
-        assert "api/routes.py:12320-12321" in text, (
-            "RFC must cite the current global sessions/events route match"
+        routes = (REPO / "api" / "routes.py").read_text(encoding="utf-8").splitlines()
+
+        # Pull every `api/routes.py:<start>-<end>` or `api/routes.py:<line>`
+        # anchor the RFC cites and confirm the referenced span exists.
+        anchors = re.findall(r"api/routes\.py:(\d+)(?:-(\d+))?", text)
+        assert anchors, "RFC must cite at least one api/routes.py source anchor"
+        for start, end in anchors:
+            lo = int(start)
+            hi = int(end) if end else lo
+            assert 1 <= lo <= len(routes), f"RFC cites api/routes.py:{start} beyond EOF ({len(routes)} lines)"
+            assert 1 <= hi <= len(routes), f"RFC cites api/routes.py:{end} beyond EOF ({len(routes)} lines)"
+
+        # The two load-bearing anchors must land on the real definitions.
+        def _anchor_line(label):
+            m = re.search(r"%s.*?api/routes\.py:(\d+)" % re.escape(label), text, re.DOTALL)
+            assert m, f"RFC must cite a routes.py anchor near {label!r}"
+            return int(m.group(1))
+
+        route_line = _anchor_line("routed at")
+        assert "/api/sessions/events" in routes[route_line - 1], (
+            f"RFC's routed-at anchor api/routes.py:{route_line} must be the "
+            f"/api/sessions/events route; got: {routes[route_line - 1].strip()!r}"
         )
-        assert "api/routes.py:16142" in text, (
-            "RFC must cite the current _handle_session_events_stream definition"
-        )
-        assert "api/routes.py:12296-12297" not in text, (
-            "RFC must not cite the stale global sessions/events route range"
-        )
-        assert "api/routes.py:16118" not in text, (
-            "RFC must not cite the stale _handle_session_events_stream line"
+        handler_line = _anchor_line("_handle_session_events_stream()")
+        assert "def _handle_session_events_stream" in routes[handler_line - 1], (
+            f"RFC's handler anchor api/routes.py:{handler_line} must be the "
+            f"_handle_session_events_stream definition; got: {routes[handler_line - 1].strip()!r}"
         )
 
     def test_contracts_distinguishes_both_endpoints(self):
