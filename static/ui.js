@@ -17563,8 +17563,49 @@ function addFiles(files){
   }
   renderTray();
 }
+const _uploadPendingFilesProgressBySession=new Map();
 function _uploadPendingFilesCurrentSession(sessionId){
   return !!(!sessionId||(S.session&&S.session.session_id===sessionId));
+}
+function _uploadPendingFilesHideProgressBar(){
+  const bar=$('uploadBar');const barWrap=$('uploadBarWrap');
+  if(!bar||!barWrap)return;
+  barWrap.classList.remove('active');
+  bar.style.width='0%';
+  if(barWrap.dataset)delete barWrap.dataset.uploadSessionId;
+}
+function _uploadPendingFilesShowProgressBar(owner,percent){
+  const bar=$('uploadBar');const barWrap=$('uploadBarWrap');
+  if(!bar||!barWrap)return;
+  if(barWrap.dataset)barWrap.dataset.uploadSessionId=owner;
+  barWrap.classList.add('active');
+  bar.style.width=`${Math.max(0,Math.min(100,Number(percent)||0))}%`;
+}
+function _uploadPendingFilesSyncProgressForSession(sessionId){
+  const owner=String(sessionId||'');
+  const state=owner?_uploadPendingFilesProgressBySession.get(owner):null;
+  if(state){_uploadPendingFilesShowProgressBar(owner,state.percent);return;}
+  _uploadPendingFilesHideProgressBar();
+}
+function _uploadPendingFilesUpdateProgress(sessionId,percent){
+  const bar=$('uploadBar');const barWrap=$('uploadBarWrap');
+  if(!bar||!barWrap)return;
+  const owner=String(sessionId||'');
+  const activeForOwner=barWrap.dataset&&barWrap.dataset.uploadSessionId===owner;
+  if(percent===null){
+    if(owner)_uploadPendingFilesProgressBySession.delete(owner);
+    if(activeForOwner){
+      _uploadPendingFilesHideProgressBar();
+    }
+    return;
+  }
+  const clamped=Math.max(0,Math.min(100,Number(percent)||0));
+  if(owner)_uploadPendingFilesProgressBySession.set(owner,{percent:clamped});
+  if(!_uploadPendingFilesCurrentSession(sessionId)){
+    if(activeForOwner)_uploadPendingFilesHideProgressBar();
+    return;
+  }
+  _uploadPendingFilesShowProgressBar(owner,clamped);
 }
 async function uploadPendingFiles(options={}){
   const opts=options||{};
@@ -17573,8 +17614,7 @@ async function uploadPendingFiles(options={}){
   if(!pendingFiles.length||!sessionId)return[];
   const clearPending=!(opts&&opts.clearPending===false);
   const names=[];let failures=0;
-  const bar=$('uploadBar');const barWrap=$('uploadBarWrap');
-  barWrap.classList.add('active');bar.style.width='0%';
+  _uploadPendingFilesUpdateProgress(sessionId,0);
   const total=pendingFiles.length;
   for(let i=0;i<total;i++){
     const f=pendingFiles[i];
@@ -17596,9 +17636,9 @@ async function uploadPendingFiles(options={}){
         names.push({name: data.filename, path: data.path, mime: data.mime, size: data.size, is_image: !!data.is_image});
       }
     }catch(e){failures++;setStatus(`\u274c ${t('upload_failed')}${f.name} \u2014 ${e.message}`);}
-    bar.style.width=`${Math.round((i+1)/total*100)}%`;
+    _uploadPendingFilesUpdateProgress(sessionId,Math.round((i+1)/total*100));
   }
-  barWrap.classList.remove('active');bar.style.width='0%';
+  _uploadPendingFilesUpdateProgress(sessionId,null);
   if(clearPending&&_uploadPendingFilesCurrentSession(sessionId)){S.pendingFiles=[];renderTray();}
   else if(typeof renderTray==='function'&&_uploadPendingFilesCurrentSession(sessionId))renderTray();
   if(failures===total&&total>0)throw new Error(t('all_uploads_failed',total));
