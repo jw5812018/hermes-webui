@@ -19,6 +19,15 @@
 - **Completed the remaining UI translations across all 8 non-English locales.** 664 strings that still fell back to English (marked `TODO` in the locale table) are now translated, so the German / Spanish / French / Japanese / Korean / Portuguese / Chinese / Russian interfaces are fully localized. No new selectable language was added — this fills in the languages already offered. Interpolation tokens are preserved per key. Thanks @mo7al876any. (#5535, #5530)
 - **Recover from "context compression exhausted" with one click.** When a long conversation grows too large for automatic compression to make room, the terminal error now shows a **Start focused continuation** action. It opens a fresh linked session that keeps your workspace, model, profile, and toolset but starts with an empty model-facing transcript — so you can describe the next narrow task without replaying the oversized context. Bare "continue"/"go on" on an exhausted conversation is intercepted and pointed at the action (substantive prompts still go through), and repeated clicks or extra tabs converge on the same continuation instead of spawning duplicates. Thanks @franksong2702. (#5538, #4685)
 
+### Fixed
+
+- **Markdown tables render even when a row has trailing whitespace or a small leading indent.** A table whose header or separator row ended in a stray space (something LLMs emit routinely) previously fell through to raw literal pipes instead of a real `<table>`; the renderer's table matcher now tolerates optional trailing whitespace and up to a 3-space leading indent, matching CommonMark. Thanks @rodboev. (#5644, #5641)
+- **No more empty italic hint under settlement error cards.** When a live turn ended in an error with no additional detail to show, the error card could render a dangling empty italic line; the hint block is now only emitted when there's actual hint text. Thanks @franksong2702. (#5653)
+
+### Internal
+
+- **Browser (Playwright) tests actually run in CI.** The pytest CI job now installs Playwright + Chromium (with a version-pinned cache), so the browser-backed test files that were silently skipping now execute — closing a real coverage gap. Thanks @rodboev. (#5661, #5658)
+
 ### Documentation
 
 - **Documented the `HERMES_WEBUI_*` environment variables and refreshed stale version/test/locale references.** README, ARCHITECTURE, TESTING, ROADMAP, SPRINTS, and the `.env` example files now describe the supported runtime env vars (host/port/state-dir/agent-dir/home) and no longer carry stale hardcoded version/test-count/locale figures. Thanks @mo7al876any. (#5536)
