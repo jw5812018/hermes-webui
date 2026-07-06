@@ -230,6 +230,42 @@ def test_branch_endpoint_consults_foreign_session_guard_on_missing_sidecar():
         "Helper should keep non-cron not_claimable sources refused"
 
 
+def test_branch_helper_gates_persisted_read_only_sources_too():
+    """A PERSISTED (stored) read-only session must hit the same branch gate as a
+    synthesized foreign one — not slip through `get_session(sid)` (#5555 gate fix).
+
+    Codex found that a stored `read_only=True, source_tag="messaging"` session could
+    be branched (200) and its source .save()d because the read-only check only lived
+    on the missing-sidecar (except KeyError) path. The loaded-session path must:
+    only allow a canonical-cron read-only source, mark it read-only-for-branch, and
+    403 every other read-only source.
+    """
+    src = _read('api/routes.py')
+    helper_match = re.search(
+        r'def _load_branch_source_or_refuse\(.*?\)(.*?)(?=\ndef )',
+        src, re.DOTALL
+    )
+    assert helper_match, "Could not find _load_branch_source_or_refuse helper"
+    helper = helper_match.group(1)
+    # The loaded (non-KeyError) path assigns the session to a local, not a bare return.
+    assert 'source = get_session(sid)' in helper, \
+        "Loaded session must be captured so it can be gated (not returned unconditionally)"
+    # The loaded path applies the read-only gate.
+    assert 'getattr(source, "read_only", False)' in helper, \
+        "Loaded read-only sessions must be gated for branching"
+    # Only canonical cron read-only sources pass, marked so the fork won't save them.
+    assert 'source._branch_source_readonly = True' in helper, \
+        "Loaded read-only cron sources must be marked read-only-for-branch"
+    # Verify the read-only gate + 403 come BEFORE the final unconditional return.
+    ro_idx = helper.index('getattr(source, "read_only", False)')
+    final_return_idx = helper.rindex('return source')
+    assert ro_idx < final_return_idx, \
+        "The read-only gate must run before the loaded session is returned"
+    # The 403 refusal exists on the loaded path (two occurrences now: synth + loaded).
+    assert helper.count('bad(handler, "Read-only sessions cannot be branched from WebUI", 403)') >= 2, \
+        "Both the synthesized and persisted read-only non-cron paths must 403"
+
+
 def test_branch_endpoint_returns_new_session_id():
     """Verify the branch endpoint returns session_id and title."""
     src = _read('api/routes.py')
