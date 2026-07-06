@@ -1214,8 +1214,11 @@ function _measureMessageVirtualRow(inner, entry){
   }
   // Persist the measured height so a later wipe-and-rebuild of this user row reserves its
   // real off-screen height instead of collapsing to the 96px estimate (the collapse that
-  // clamps/re-anchors the viewport — #5637/#5638 mobile jump-back, both classes).
-  if(totalHeight>0 && primary.dataset && primary.dataset.role==='user'){
+  // clamps/re-anchors the viewport — #5637/#5638 mobile jump-back, both classes). The
+  // typeof guard keeps _measureMessageVirtualRow runnable in the node test harnesses that
+  // extract it without this helper (they stub every collaborator by name).
+  if(totalHeight>0 && primary.dataset && primary.dataset.role==='user'
+     && typeof _rememberUserRowIntrinsicHeight==='function'){
     _rememberUserRowIntrinsicHeight(primary.dataset.sessionMsgIdx, totalHeight);
     primary.style.containIntrinsicSize='auto '+Math.round(totalHeight)+'px';
   }
@@ -14001,8 +14004,10 @@ function renderMessages(options){
       // does not collapse scrollHeight to the flat 96px estimate (the collapse that
       // clamps/re-anchors the viewport on mobile — #5637/#5638, both jump classes). Uses
       // the remembered measured height when this row has been measured before, else a
-      // content-length estimate; the measure pass refines it exactly next frame.
-      _applyUserRowIntrinsicHeight(row, newRawText);
+      // content-length estimate; the measure pass refines it exactly next frame. The
+      // typeof guard keeps renderMessages runnable in the node test harnesses that
+      // extract it without this helper (they stub every collaborator by name).
+      if(typeof _applyUserRowIntrinsicHeight==='function') _applyUserRowIntrinsicHeight(row, newRawText);
       inner.appendChild(row);
       userRows.set(rawIdx, row);
       continue;
