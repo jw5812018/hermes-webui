@@ -953,12 +953,11 @@ function _captureMessageViewportAnchor(){
         key:row&&row.dataset?String(row.dataset.messageAnchorKey||''):'',
         topOffset:rect.top-containerRect.top,
         topPadBefore,
-        // Snapshot the scroll geometry at capture so a later realign can detect that
-        // content grew ABOVE the viewport between capture and restore — the streaming
-        // case where the anchor's topOffset is stale and realigning to it would yank a
-        // still reader backward (issue #5637).
+        // Snapshot the scroll height at capture so a later realign can detect that
+        // content grew between capture and restore — the streaming case where the
+        // anchor's topOffset is stale and realigning to it would yank a still reader
+        // backward (issue #5637).
         scrollHeightAtCapture:container.scrollHeight,
-        scrollTopAtCapture:container.scrollTop,
       };
     }
   }
@@ -1050,10 +1049,10 @@ function _restoreMessageViewportAnchor(anchor, rawIdxDelta){
   const _realignDelta=(rect.top-containerRect.top)-targetTop;
   const _shAtCap=Number(anchor.scrollHeightAtCapture);
   if(Number.isFinite(_shAtCap)){
-    const _grewAbove=(container.scrollHeight-_shAtCap)>4;
+    const _grewSinceCapture=(container.scrollHeight-_shAtCap)>4;
     const _activeIntent=(typeof _recentMessageScrollIntent==='function' && _recentMessageScrollIntent())
       || (typeof _recentMessageTouchScrollIntent==='function' && _recentMessageTouchScrollIntent());
-    if(_grewAbove&&!_activeIntent&&Math.abs(_realignDelta)>8){
+    if(_grewSinceCapture&&!_activeIntent&&Math.abs(_realignDelta)>8){
       return false;
     }
   }

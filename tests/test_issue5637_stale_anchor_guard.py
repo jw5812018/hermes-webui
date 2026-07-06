@@ -217,3 +217,17 @@ def test_fallback_backward_compatible_without_capture_scrollheight():
         active_intent=False,
     )))
     assert m["writes"] == [89577]
+
+
+def test_fallback_allows_snapshot_top_with_active_intent():
+    """Content grew since snapshot, but the reader has recent real input intent -> the
+    fallback keeps its legitimate absolute restore (an actively-scrolling reader owns the
+    snapshot). Mirrors the realign-guard active-intent case.
+    Mutation: drop the `!_activeIntent` term from the fallback guard and this fails
+    (the write would be wrongly refused)."""
+    m = json.loads(_run_node(_fallback_harness(
+        snapshot_scroll_height=90000, cur_scroll_height=90453, snapshot_top=89577,
+        active_intent=True,
+    )))
+    assert m["writes"] == [89577]
+
