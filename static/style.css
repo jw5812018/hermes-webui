@@ -4109,6 +4109,15 @@ body.resizing .sidebar{transition:none!important;}
   font-size:11.5px;
   order:3;
 }
+.transparent-event-time{
+  flex-shrink:0;
+  order:4;
+  color:var(--muted);
+  font-variant-numeric:tabular-nums;
+  opacity:.55;
+  white-space:nowrap;
+  font-size:10px;
+}
 .transparent-event-row .thinking-card-label{
   display:inline;
   flex:0 0 auto;
@@ -4133,7 +4142,7 @@ body.resizing .sidebar{transition:none!important;}
 }
 .transparent-event-status{
   flex-shrink:0;
-  order:4;
+  order:5;
   color:var(--muted);
   opacity:.64;
   font-size:10px;
@@ -4142,6 +4151,13 @@ body.resizing .sidebar{transition:none!important;}
   padding:1px 5px;
   border-radius:6px;
   background:transparent;
+}
+.transparent-event-row .thinking-card-btn-row{
+  order:10;
+  flex-shrink:0;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
 }
 /* Failed / running / interrupted must be legible — a failure in a long trace was
    previously invisible (only a muted .64 badge), a regression vs the old card's
