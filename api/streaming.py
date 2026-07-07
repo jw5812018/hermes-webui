@@ -8738,8 +8738,8 @@ def _run_agent_streaming(
                             record_process_wakeup_provider_unavailable_pause(
                                 s,
                                 classification=_err_type,
-                                model=getattr(s, 'model', None) or resolved_model or model,
-                                provider=getattr(s, 'model_provider', None) or resolved_provider,
+                                model=resolved_model or model,
+                                provider=resolved_provider or provider_context or model_provider,
                             )
                         _materialize_pending_user_turn_before_error(s)
                         s.active_stream_id = None
@@ -9839,8 +9839,8 @@ def _run_agent_streaming(
                         _pause = record_process_wakeup_provider_unavailable_pause(
                             s,
                             classification=_exc_type,
-                            model=getattr(s, 'model', None) or resolved_model or model,
-                            provider=getattr(s, 'model_provider', None) or resolved_provider,
+                            model=resolved_model or model,
+                            provider=resolved_provider or provider_context or model_provider,
                         )
                         if _pause is not None:
                             try:
@@ -9864,8 +9864,8 @@ def _run_agent_streaming(
                     record_process_wakeup_provider_unavailable_pause(
                         s,
                         classification=_exc_type,
-                        model=getattr(s, 'model', None) or resolved_model or model,
-                        provider=getattr(s, 'model_provider', None) or resolved_provider,
+                        model=resolved_model or model,
+                        provider=resolved_provider or provider_context or model_provider,
                     )
                 _materialize_pending_user_turn_before_error(s)
                 s.active_stream_id = None

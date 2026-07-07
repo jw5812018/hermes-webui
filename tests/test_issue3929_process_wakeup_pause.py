@@ -115,6 +115,8 @@ class _StaleCredentialPoolEmptyAgent(_MockAgent):
     def run_conversation(self, **_kwargs):
         session = models.SESSIONS[self.session_id]
         session.active_stream_id = "stream-newer-run"
+        session.model = "newer-model"
+        session.model_provider = "newer-provider"
         session.pending_user_source = "webui"
         session.save(touch_updated_at=False)
         raise RuntimeError("All 0 credential(s) exhausted for test-provider")
@@ -297,9 +299,13 @@ def test_stale_credential_empty_process_wakeup_still_records_pause(tmp_path):
     saved = Session.load(session.session_id)
     assert saved is not None
     assert saved.active_stream_id == "stream-newer-run"
+    assert saved.model == "newer-model"
+    assert saved.model_provider == "newer-provider"
     assert saved.pending_user_source == "webui"
     assert saved.process_wakeup_pause["paused"] is True
     assert saved.process_wakeup_pause["classification"] == "credential_pool_empty"
+    assert saved.process_wakeup_pause["model"] == "test-model"
+    assert saved.process_wakeup_pause["provider"] == "test-provider"
     assert saved.process_wakeup_pause["suppressed_count"] == 0
     assert not any(message.get("_error") for message in saved.messages)
 
