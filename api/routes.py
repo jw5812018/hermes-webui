@@ -6314,16 +6314,26 @@ def _read_profile_model_config(
 # new inode on Linux). mtime+size auto-invalidates on in-place edits; a 60s TTL
 # is the backstop in case of coarse mtime resolution (some network filesystems
 # round mtime to whole seconds — the size guard catches a write of equal-length
-# bytes within the same second). Reads are guarded by a single Lock to
-# keep the hot path simple; the underlying yaml.safe_load is the slow
-# step, not the lock, so contention is bounded.
-_PROFILE_CONFIG_CACHE: "dict[tuple, tuple[float, dict]]" = {}
+# bytes within the same second). On cache hit, a quick content-prefix comparison
+# (first 128 chars) catches in-place rewrites that inode+mtime+size miss on
+# coarse filesystems (Greptile P1, PR#5803 discussion_r3548069113).
+# Reads are guarded by a single Lock to keep the hot path simple;
+# the underlying yaml.safe_load is the slow step, not the lock, so contention
+# is bounded.
+_PROFILE_CONFIG_CACHE: "dict[tuple, tuple[float, str | None, dict]]" = {}
 _PROFILE_CONFIG_CACHE_TTL_SECONDS = 60.0
 _PROFILE_CONFIG_CACHE_LOCK = threading.Lock()
 
 
 def _read_profile_config_cached(profile_name: str, cfg_path: str) -> dict | None:
-    """Return parsed profile config, caching by (mtime, size) with TTL backstop."""
+    """Return parsed profile config, caching by (inode, mtime, size) with
+    TTL backstop and content-prefix verification.
+
+    The content-prefix comparison (first 128 chars of the file) catches
+    in-place rewrites where inode+mtime+size are identical on coarse
+    filesystems — most editors use atomic-rename (new inode), but tools
+    like sed -i or file.write() in-place can keep the same inode.
+    """
     try:
         st = os.stat(cfg_path)
     except OSError:
@@ -6336,19 +6346,31 @@ def _read_profile_config_cached(profile_name: str, cfg_path: str) -> dict | None
     with _PROFILE_CONFIG_CACHE_LOCK:
         cached = _PROFILE_CONFIG_CACHE.get(key)
         if cached is not None:
-            cached_at, cached_dict = cached
+            cached_at, cached_prefix, cached_dict = cached
             if (now - cached_at) <= _PROFILE_CONFIG_CACHE_TTL_SECONDS:
-                return cached_dict
+                # Cheap content verification: read first 128 chars to catch
+                # in-place rewrites that inode+mtime+size don't detect.
+                _current_prefix = None
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as _f:
+                        _current_prefix = _f.read(128)
+                except Exception:
+                    pass
+                if _current_prefix == cached_prefix:
+                    return cached_dict
+                # Content changed while key collided — fall through to re-parse
     import yaml
     try:
         with open(cfg_path, encoding="utf-8") as _f:
-            parsed = yaml.safe_load(_f) or {}
+            content = _f.read()
+            parsed = yaml.safe_load(content) or {}
     except Exception:
         return None
     if not isinstance(parsed, dict):
         return None
+    content_prefix = content[:128]  # first 128 chars for change detection
     with _PROFILE_CONFIG_CACHE_LOCK:
-        _PROFILE_CONFIG_CACHE[key] = (now, parsed)
+        _PROFILE_CONFIG_CACHE[key] = (now, content_prefix, parsed)
         # Cap the cache at 32 entries; profiles are bounded in practice
         # and unbounded growth would be a leak.
         if len(_PROFILE_CONFIG_CACHE) > 32:
