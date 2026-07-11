@@ -4118,6 +4118,13 @@ body.resizing .sidebar{transition:none!important;}
   white-space:nowrap;
   font-size:10px;
 }
+/* Narrow viewports: the ~50px of fixed time-label chrome squeezes the collapsed
+   row's flexible preview (the most informative part) toward zero. Hide the label
+   under ~420px; the full timing is still available in Compact/expanded review and
+   via the title tooltip on wider screens. (#5739 Fable UX fix.) */
+@media (max-width:420px){
+  .transparent-event-time{ display:none; }
+}
 .transparent-event-row .thinking-card-label{
   display:inline;
   flex:0 0 auto;

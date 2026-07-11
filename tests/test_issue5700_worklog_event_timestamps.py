@@ -247,6 +247,7 @@ global._toolWorklogListEl = () => null;
 global._activityKeyForLiveTurn = () => 'activity-key';
 global._assistantTurnBlocks = () => null;
 eval(extractFunc('_activityClockLabel'));
+eval(extractFunc('_activityFullClockLabel'));
 eval(extractFunc('_timestampSeconds'));
 eval(extractFunc('_firstValidTimestampSeconds'));
 eval(extractFunc('_transparentEventTimestampSeconds'));
@@ -456,6 +457,31 @@ process.stdout.write(JSON.stringify({
     assert "Invalid Date" not in (data["hugeLabel"] or "")
     assert "Invalid Date" not in (data["normalLabel"] or "")
     assert data["normalLabel"]
+
+
+def test_full_clock_label_tooltip_includes_date_and_rejects_bad_epochs():
+    # The worklog time label carries a full date+time tooltip (title attr) so a
+    # settled session reviewed days later (or a run crossing midnight) is not
+    # date-ambiguous. Bad epochs must yield '' (never 'Invalid Date'). (#5739 Fable.)
+    data = _run_node(
+        """
+process.stdout.write(JSON.stringify({
+  normal: _activityFullClockLabel(1700000901),
+  huge: _activityFullClockLabel(1e20),
+  zero: _activityFullClockLabel(0),
+  negative: _activityFullClockLabel(-1),
+}));
+"""
+    )
+
+    # a normal epoch yields a non-empty full label with the year present, no "Invalid Date"
+    assert data["normal"]
+    assert "Invalid Date" not in data["normal"]
+    assert "2023" in data["normal"] or "2024" in data["normal"] or "2025" in data["normal"] or "2026" in data["normal"]
+    # out-of-range / non-positive epochs yield empty string (no tooltip)
+    assert data["huge"] == ""
+    assert data["zero"] == ""
+    assert data["negative"] == ""
 
 
 def test_settled_anchor_scene_rows_use_row_created_at_timestamps():
