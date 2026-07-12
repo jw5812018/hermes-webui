@@ -156,6 +156,7 @@ class TestCustomEndpointModelStripping:
         old_cfg = dict(_api_config.cfg)
         old_cache = _api_config._available_models_cache
         old_memo = _api_config._advertised_model_ids_memo
+        old_fp = _api_config._available_models_cache_source_fingerprint
         model_cfg = {}
         if provider:
             model_cfg['provider'] = provider
@@ -171,6 +172,7 @@ class TestCustomEndpointModelStripping:
                     'models': [{'id': mid, 'label': mid} for mid in advertised_ids],
                 }]
             }
+            _api_config._available_models_cache_source_fingerprint = _api_config._models_cache_source_fingerprint()
         _api_config._advertised_model_ids_memo = None
         try:
             return _api_config.resolve_model_provider(model_id)
@@ -179,6 +181,7 @@ class TestCustomEndpointModelStripping:
             _api_config.cfg.update(old_cfg)
             _api_config._available_models_cache = old_cache
             _api_config._advertised_model_ids_memo = old_memo
+            _api_config._available_models_cache_source_fingerprint = old_fp
 
     def test_prefixed_model_stripped_for_custom_endpoint(self):
         """Issue #433: 'openai/gpt-5.4' with custom base_url returns bare 'gpt-5.4'

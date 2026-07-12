@@ -4579,6 +4579,20 @@ def _endpoint_advertised_model_ids(provider_id: str | None) -> frozenset | None:
     snapshot = _available_models_cache  # atomic reference read; publishes replace wholesale
     if snapshot is None:
         return None
+    # Profile-isolation fail-safe (profiles are islands): the catalog cache is a
+    # process global, so a concurrently-active profile could have published the
+    # snapshot we're now reading. Only trust it for provenance when its published
+    # source fingerprint still matches the current runtime fingerprint — the
+    # ``config_yaml`` axis of that fingerprint is the PROFILE-SPECIFIC config path
+    # (_get_config_path -> get_active_hermes_home), so a match guarantees the
+    # snapshot belongs to the profile asking. Any mismatch (foreign profile,
+    # config edit, cold fingerprint) returns None so the caller preserves the id
+    # verbatim rather than stripping against another profile's catalog.
+    try:
+        if _available_models_cache_source_fingerprint != _models_cache_source_fingerprint():
+            return None
+    except Exception:
+        return None  # fingerprint unavailable → no trustworthy provenance
     memo = _advertised_model_ids_memo
     # Identity check (``is``), not id(): holding the snapshot reference in the
     # memo keeps it alive, so a freed-then-reused id() can't cause a false hit.
@@ -4594,9 +4608,15 @@ def _endpoint_advertised_model_ids(provider_id: str | None) -> frozenset | None:
             slug = str(group.get("provider_id") or "").strip().lower()
             if not slug:
                 continue
+            # Union BOTH catalog buckets: a provider's models can be split across
+            # ``models`` (visible) and ``extra_models`` (overflow) by the picker,
+            # so an id the endpoint genuinely advertised may live in either. Only
+            # reading ``models`` would miss it and mis-resolve (e.g. leave the
+            # #433 bare id unstripped because it sits in extra_models).
             ids = frozenset(
                 str(m.get("id"))
-                for m in (group.get("models") or [])
+                for bucket in ("models", "extra_models")
+                for m in (group.get(bucket) or [])
                 if isinstance(m, dict) and m.get("id")
             )
             by_slug[slug] = by_slug.get(slug, frozenset()) | ids

@@ -40,6 +40,7 @@ def _resolve_with_catalog(model_id, advertised_ids, *, provider=None, base_url=N
     """
     old_cache = config._available_models_cache
     old_memo = config._advertised_model_ids_memo
+    old_fp = config._available_models_cache_source_fingerprint
     if advertised_ids is None:
         config._available_models_cache = None
     else:
@@ -49,12 +50,16 @@ def _resolve_with_catalog(model_id, advertised_ids, *, provider=None, base_url=N
                 'models': [{'id': mid, 'label': mid} for mid in advertised_ids],
             }]
         }
+        # Stamp the source fingerprint exactly as the real publish sites do, so
+        # the accessor's profile-isolation guard trusts this seeded snapshot.
+        config._available_models_cache_source_fingerprint = config._models_cache_source_fingerprint()
     config._advertised_model_ids_memo = None  # force recompute against the seeded snapshot
     try:
         return _resolve_with_config(model_id, provider=provider, base_url=base_url, default=default)
     finally:
         config._available_models_cache = old_cache
         config._advertised_model_ids_memo = old_memo
+        config._available_models_cache_source_fingerprint = old_fp
 
 
 # ── OpenRouter prefix handling ────────────────────────────────────────────
@@ -312,6 +317,64 @@ def test_custom_remote_prefers_full_id_when_both_advertised_5979():
         base_url='https://proxy.example.com/v1',
     )
     assert model == 'x-ai/grok-4.5', f"exact full selection must win, got {model!r}"
+
+
+def test_custom_remote_extra_models_bucket_counts_as_advertised_5979():
+    """Provenance must read BOTH catalog buckets. A relay's bare id sitting in
+    ``extra_models`` (picker overflow) still counts as advertised, so the stale
+    ``openai/gpt-5.4`` prefix is stripped (#433) even when ``models`` is full of
+    OTHER ids and the bare id overflowed into ``extra_models``.
+    """
+    old_cache = config._available_models_cache
+    old_memo = config._advertised_model_ids_memo
+    old_fp = config._available_models_cache_source_fingerprint
+    config._available_models_cache = {
+        'groups': [{
+            'provider_id': 'custom',
+            'models': [{'id': f'filler-{i}', 'label': f'filler-{i}'} for i in range(30)],
+            'extra_models': [{'id': 'gpt-5.4', 'label': 'gpt-5.4'}],  # bare id overflowed here
+        }]
+    }
+    config._available_models_cache_source_fingerprint = config._models_cache_source_fingerprint()
+    config._advertised_model_ids_memo = None
+    try:
+        model, _, _ = _resolve_with_config(
+            'openai/gpt-5.4', provider='custom', base_url='https://relay.example/v1',
+        )
+    finally:
+        config._available_models_cache = old_cache
+        config._advertised_model_ids_memo = old_memo
+        config._available_models_cache_source_fingerprint = old_fp
+    assert model == 'gpt-5.4', f"bare id in extra_models must count as advertised, got {model!r}"
+
+
+def test_custom_remote_foreign_profile_catalog_preserves_verbatim_5979():
+    """Profile-isolation fail-safe: when the catalog snapshot's source
+    fingerprint does NOT match the current runtime (a concurrently-active
+    foreign profile published it), provenance is untrusted and the id is
+    preserved verbatim — never stripped against another profile's catalog.
+    """
+    old_cache = config._available_models_cache
+    old_memo = config._advertised_model_ids_memo
+    old_fp = config._available_models_cache_source_fingerprint
+    # Snapshot advertises ONLY the bare id (would normally strip openai/gpt-5.4),
+    # but the fingerprint is a deliberate mismatch (a foreign profile's stamp).
+    config._available_models_cache = {
+        'groups': [{'provider_id': 'custom', 'models': [{'id': 'gpt-5.4', 'label': 'gpt-5.4'}]}]
+    }
+    config._available_models_cache_source_fingerprint = {'config_yaml': {'path': '/some/other/profile'}}
+    config._advertised_model_ids_memo = None
+    try:
+        model, _, _ = _resolve_with_config(
+            'openai/gpt-5.4', provider='custom', base_url='https://relay.example/v1',
+        )
+    finally:
+        config._available_models_cache = old_cache
+        config._advertised_model_ids_memo = old_memo
+        config._available_models_cache_source_fingerprint = old_fp
+    assert model == 'openai/gpt-5.4', (
+        f"foreign-profile catalog must not strip; expected verbatim, got {model!r}"
+    )
 
 
 def test_custom_remote_preserves_unknown_prefix_548():
