@@ -96,9 +96,33 @@ def test_restart_active_profile_gateway_success_uses_active_profile_home(monkeyp
 
     assert result["status"] == "completed"
     assert result["message"] == "Gateway service restarted successfully"
-    assert called["args"] == ["/mock/bin/hermes", "gateway", "restart"]
+    assert called["args"] == ["/mock/bin/hermes", "--profile", "default", "gateway", "restart"]
     assert called["env"]["HERMES_HOME"] == "/mock/hermes/home"
     assert gateway_restart._GATEWAY_RESTART_LOCK.locked() is False
+
+
+def test_restart_active_profile_gateway_pins_explicit_default_profile(monkeypatch):
+    gateway_restart._GATEWAY_RESTART_LOCK = threading.Lock()
+    called = {}
+
+    def fake_popen(args, stdout=None, stderr=None, text=True, env=None):
+        called["args"] = args
+        called["env"] = env
+        return MockPopen(args, stdout_text="ok", returncode=0, env=env)
+
+    monkeypatch.setattr(
+        gateway_restart,
+        "get_hermes_home_for_profile",
+        lambda profile: "/mock/hermes/default" if profile == "default" else "/mock/hermes/profiles/work",
+    )
+    monkeypatch.setattr(gateway_restart.shutil, "which", lambda cmd: "/mock/bin/hermes")
+    monkeypatch.setattr(gateway_restart.subprocess, "Popen", fake_popen)
+
+    result = gateway_restart.restart_active_profile_gateway(profile="default")
+
+    assert result["status"] == "completed"
+    assert called["args"] == ["/mock/bin/hermes", "--profile", "default", "gateway", "restart"]
+    assert called["env"]["HERMES_HOME"] == "/mock/hermes/default"
 
 
 def test_restart_active_profile_gateway_failure_preserves_empty_output_contract(monkeypatch):

@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 
 from api.agent_health import get_active_profile_gateway_running_pid
 from api.gateway_restart import restart_active_profile_gateway
+from api.profiles import get_active_profile_name
 from api.config import REPO_ROOT, STREAMS, STREAMS_LOCK
 
 logger = logging.getLogger(__name__)
@@ -1816,8 +1817,9 @@ def _ensure_gateway_restart_for_agent_update() -> tuple[bool, dict]:
         - ok is False when restart did not complete and callers must abort success.
         - restart_payload contains helper status fields for response shaping.
     """
-    gateway_pid_before_restart = get_active_profile_gateway_running_pid()
-    restart_result = restart_active_profile_gateway()
+    target_profile = str(get_active_profile_name() or "default").strip() or "default"
+    gateway_pid_before_restart = get_active_profile_gateway_running_pid(profile=target_profile)
+    restart_result = restart_active_profile_gateway(profile=target_profile)
     status = str(restart_result.get("status") or "")
     if status in {"completed", "in_progress"}:
         return True, restart_result
@@ -1829,7 +1831,7 @@ def _ensure_gateway_restart_for_agent_update() -> tuple[bool, dict]:
     # bounded delay so an already-applied Agent update is not reported as a
     # complete failure because of that transient process handoff.
     time.sleep(_AGENT_GATEWAY_RESTART_RETRY_DELAY_S)
-    retry_result = restart_active_profile_gateway()
+    retry_result = restart_active_profile_gateway(profile=target_profile)
     retry_status = str(retry_result.get("status") or "")
     if retry_status in {"completed", "in_progress"}:
         return True, {
@@ -1848,7 +1850,7 @@ def _ensure_gateway_restart_for_agent_update() -> tuple[bool, dict]:
     # service. Only accept that recovery when the confirmed local PID changed;
     # a merely-alive old gateway has not loaded the updated Agent checkout.
     time.sleep(_AGENT_GATEWAY_RESTART_RETRY_DELAY_S)
-    gateway_pid_after_retry = get_active_profile_gateway_running_pid()
+    gateway_pid_after_retry = get_active_profile_gateway_running_pid(profile=target_profile)
     if (
         gateway_pid_before_restart is not None
         and gateway_pid_after_retry is not None

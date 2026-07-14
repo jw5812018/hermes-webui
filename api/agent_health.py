@@ -251,7 +251,7 @@ def _gateway_running_pid(gateway_status: Any, pid_path: Path | None) -> int | No
         return get_running_pid()
 
 
-def get_active_profile_gateway_running_pid() -> int | None:
+def get_active_profile_gateway_running_pid(profile: str | None = None) -> int | None:
     """Return the confirmed active-profile PID without state fallbacks.
 
     Update recovery needs process identity, not just a recent ``running`` state:
@@ -260,10 +260,14 @@ def get_active_profile_gateway_running_pid() -> int | None:
     the default-root health path. Keep this fail-closed when status is unavailable.
     """
     try:
-        from api.profiles import get_active_hermes_home
+        from api.profiles import get_active_hermes_home, get_hermes_home_for_profile
 
         gateway_status = _gateway_status_module()
-        gateway_pid_path = Path(get_active_hermes_home()) / _GATEWAY_PID_FILE
+        if profile is None:
+            gateway_home = get_active_hermes_home()
+        else:
+            gateway_home = get_hermes_home_for_profile(profile)
+        gateway_pid_path = Path(gateway_home) / _GATEWAY_PID_FILE
         return _gateway_running_pid(gateway_status, gateway_pid_path)
     except Exception:
         return None
