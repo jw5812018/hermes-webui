@@ -8441,6 +8441,17 @@ def _message_window_for_display(messages, msg_limit=None, msg_before=None, expan
 
 
 _LIMITED_TOOL_CONTENT_MAX_CHARS = 4096
+# Defensive row backstop for the GET /api/session display path's state.db read.
+# This is NOT a semantic window (the display window counts visible rows
+# post-reconciliation via _message_window_for_display); it is a safety net so a
+# pathological/huge state.db cannot materialize unbounded rows into memory on the
+# display path. Legitimate sessions stay far below this; the compressed-session
+# case where _state_db_since_timestamp_for_limited_display bails (and would
+# otherwise full-scan) is the main beneficiary. Generous on purpose: no real
+# conversation approaches it, and the existing since_timestamp optimization
+# already handles the common tail-load case. The full-history model-context
+# callers (reconciliation, new-turn context) do NOT use this cap.
+_STATE_DB_DISPLAY_ROW_BACKSTOP = 50000
 _LIMITED_TOOL_CONTENT_NOTICE = (
     "\n\n[Tool output truncated in paginated session response; "
     "load the full transcript to inspect the complete result.]"
@@ -12424,6 +12435,13 @@ def handle_get(handler, parsed) -> bool:
                 _state_db_reader_kwargs = {"profile": _session_profile}
                 if state_db_since_timestamp is not None:
                     _state_db_reader_kwargs["since_timestamp"] = state_db_since_timestamp
+                # Apply the display-path row backstop (see
+                # _STATE_DB_DISPLAY_ROW_BACKSTOP). This is a defensive cap, not a
+                # semantic window — it only bounds a pathological state.db. The
+                # since_timestamp optimization above already bounds the common
+                # uncompressed tail load; this covers the compressed-session bail
+                # case where that optimization returns None.
+                _state_db_reader_kwargs["limit"] = _STATE_DB_DISPLAY_ROW_BACKSTOP
                 state_db_messages = get_state_db_session_messages(
                     sid,
                     **_state_db_reader_kwargs,
