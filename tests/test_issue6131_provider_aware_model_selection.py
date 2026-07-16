@@ -18,6 +18,89 @@ const fs = require('fs');
 const uiSrc = fs.readFileSync(process.argv[1], 'utf8');
 const preferredProvider = process.argv[2] || '';
 
+function isIdentifierChar(ch) {
+  return /[A-Za-z0-9_$]/.test(ch || '');
+}
+
+function previousSignificantToken(source, index) {
+  let i = index - 1;
+  while (i >= 0 && /\s/.test(source[i])) i -= 1;
+  if (i < 0) return '';
+  if (!isIdentifierChar(source[i])) return source[i];
+  const end = i + 1;
+  while (i >= 0 && isIdentifierChar(source[i])) i -= 1;
+  return source.slice(i + 1, end);
+}
+
+function canStartRegexLiteral(source, index) {
+  const token = previousSignificantToken(source, index);
+  if (!token) return true;
+  if ('({[=,:;!&|?+-*~^<>'.includes(token)) return true;
+  return [
+    'return',
+    'throw',
+    'case',
+    'delete',
+    'typeof',
+    'void',
+    'new',
+    'in',
+    'of',
+    'yield',
+    'await',
+  ].includes(token);
+}
+
+function skipQuotedLiteral(source, index, quote) {
+  for (let i = index + 1; i < source.length; i += 1) {
+    if (source[i] === '\\') {
+      i += 1;
+      continue;
+    }
+    if (source[i] === quote) return i;
+  }
+  throw new Error('unterminated string literal');
+}
+
+function skipTemplateLiteral(source, index) {
+  for (let i = index + 1; i < source.length; i += 1) {
+    if (source[i] === '\\') {
+      i += 1;
+      continue;
+    }
+    if (source[i] === '`') return i;
+  }
+  throw new Error('unterminated template literal');
+}
+
+function skipLineComment(source, index) {
+  const end = source.indexOf('\n', index + 2);
+  return end < 0 ? source.length - 1 : end;
+}
+
+function skipBlockComment(source, index) {
+  const end = source.indexOf('*/', index + 2);
+  if (end < 0) throw new Error('unterminated block comment');
+  return end + 1;
+}
+
+function skipRegexLiteral(source, index) {
+  let inClass = false;
+  for (let i = index + 1; i < source.length; i += 1) {
+    if (source[i] === '\\') {
+      i += 1;
+      continue;
+    }
+    if (source[i] === '[') inClass = true;
+    else if (source[i] === ']') inClass = false;
+    else if (source[i] === '/' && !inClass) {
+      while (/[A-Za-z]/.test(source[i + 1] || '')) i += 1;
+      return i;
+    }
+  }
+  throw new Error('unterminated regex literal');
+}
+
 function extractFunction(source, name) {
   const marker = 'function ' + name + '(';
   const start = source.indexOf(marker);
@@ -25,14 +108,41 @@ function extractFunction(source, name) {
   const brace = source.indexOf('{', source.indexOf(')', start));
   let depth = 0;
   for (let i = brace; i < source.length; i++) {
-    if (source[i] === '{') depth += 1;
-    else if (source[i] === '}') {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === '"' || ch === "'") i = skipQuotedLiteral(source, i, ch);
+    else if (ch === '`') i = skipTemplateLiteral(source, i);
+    else if (ch === '/' && next === '/') i = skipLineComment(source, i);
+    else if (ch === '/' && next === '*') i = skipBlockComment(source, i);
+    else if (ch === '/' && canStartRegexLiteral(source, i)) i = skipRegexLiteral(source, i);
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
       depth -= 1;
       if (depth === 0) return source.slice(start, i + 1);
     }
   }
   throw new Error('unterminated: ' + name);
 }
+
+function assertExtractorSkipsLexicalBraces() {
+  const trickySource = [
+    'function trickyExtractorTarget() {',
+    "  const stringValue = '}';",
+    '  const templateValue = `raw } ${1 + 1}`;',
+    '  const regexValue = /}/;',
+    '  // }',
+    '  /* { */',
+    '  return /}/.test(stringValue) ? templateValue : regexValue;',
+    '}',
+    'function afterTarget() { return 2; }',
+  ].join('\n');
+  const extracted = extractFunction(trickySource, 'trickyExtractorTarget');
+  if (!extracted.includes('return /}/.test') || extracted.includes('afterTarget')) {
+    throw new Error('extractFunction did not ignore lexical braces');
+  }
+}
+
+assertExtractorSkipsLexicalBraces();
 
 eval([
   '_getOptionProviderId',
