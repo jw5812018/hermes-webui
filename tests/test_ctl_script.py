@@ -354,6 +354,9 @@ def test_start_loads_dotenv_double_quoted_port_with_trailing_comment(tmp_path):
         },
         repo_root=repo_root,
         load_dotenv=True,
+        # The legitimate three-second startup monitor plus suite cleanup can
+        # exceed run_ctl's narrow default budget on a loaded test worker.
+        timeout=15,
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
