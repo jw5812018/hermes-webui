@@ -115,6 +115,25 @@ def test_attention_summary_prefers_pending_approvals_over_clarify_questions():
         _clear_attention_state(sid)
 
 
+def test_attention_summary_ignores_stale_gateway_mirror():
+    sid = "attention-stale-gateway-session"
+    _clear_attention_state(sid)
+    try:
+        with routes._lock:
+            routes._pending[sid] = [{
+                "_gateway_mirror": True,
+                "approval_id": "appr-stale-gateway",
+                "run_id": "run-stale-gateway",
+                "command": "rm -rf /tmp/stale",
+                "description": "Stale approval",
+            }]
+            routes._gateway_queues[sid] = []
+
+        assert routes._session_attention_summary(sid) is None
+    finally:
+        _clear_attention_state(sid)
+
+
 def test_attention_summary_reports_clarify_when_no_approval_is_pending():
     sid = "attention-clarify-session"
     _clear_attention_state(sid)

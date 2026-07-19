@@ -47,7 +47,6 @@ _approval_sse_subscribers: dict[str, list[queue.Queue]] = {}
 _GATEWAY_MIRROR_FLAG = "_gateway_mirror"
 _GATEWAY_MIRROR_TOKEN = "_gateway_mirror_token"
 _GATEWAY_ENTRY_DATA_TOKEN_KEY = "_webui_mirror_token"
-_GATEWAY_ENTRY_DATA_LOCAL_HEAD_KEY = "_webui_local_head"
 
 
 def _approval_sse_subscribe(session_id: str) -> queue.Queue:
@@ -116,8 +115,6 @@ def _gateway_mirror_entry_token(entry) -> str | None:
     """
     data = getattr(entry, "data", None)
     if isinstance(data, dict):
-        if data.get(_GATEWAY_ENTRY_DATA_LOCAL_HEAD_KEY):
-            return None
         token = data.get(_GATEWAY_ENTRY_DATA_TOKEN_KEY)
         if not token:
             token = uuid.uuid4().hex
@@ -150,8 +147,31 @@ def reconcile_gateway_pending_mirror_locked(session_key: str) -> tuple[dict | No
 
     live_head_entry = live_gateway_queue[0] if live_gateway_queue else None
     live_head_data = getattr(live_head_entry, "data", None) or {}
-    live_token = _gateway_mirror_entry_token(live_head_entry) if live_head_entry and live_head_data else None
+    has_no_run_mirror = any(
+        _is_gateway_mirror_entry(entry)
+        and not str(entry.get("run_id") or "").strip()
+        for entry in queue_list
+    )
     live_run_id = str(live_head_data.get("run_id") or "").strip()
+    live_has_token = bool(live_head_data.get(_GATEWAY_ENTRY_DATA_TOKEN_KEY))
+    live_local_tokens: set[str] = set()
+    for live_entry in live_gateway_queue:
+        live_data = getattr(live_entry, "data", None) or {}
+        if str(live_data.get("run_id") or "").strip():
+            continue
+        live_entry_token = str(live_data.get(_GATEWAY_ENTRY_DATA_TOKEN_KEY) or "").strip()
+        if live_entry_token or not has_no_run_mirror:
+            live_entry_token = _gateway_mirror_entry_token(live_entry) or ""
+            if live_entry_token:
+                live_local_tokens.add(live_entry_token)
+                if not str(live_data.get("approval_id") or "").strip():
+                    live_data["approval_id"] = f"gwlocal:{live_entry_token}"
+    live_token = (
+        _gateway_mirror_entry_token(live_head_entry)
+        if live_head_entry and live_head_data
+        and (live_run_id or live_has_token or not has_no_run_mirror)
+        else None
+    )
     if live_token and live_run_id and not str(live_head_data.get("approval_id") or "").strip():
         live_head_data["approval_id"] = f"gwrun:{live_run_id}:{live_token}"
     live_approval_id = str(live_head_data.get("approval_id") or "").strip()
@@ -204,6 +224,10 @@ def reconcile_gateway_pending_mirror_locked(session_key: str) -> tuple[dict | No
                 changed = True
             rebuilt.append(entry)
             live_mirror_present = True
+            continue
+
+        if entry_token and entry_token in live_local_tokens:
+            rebuilt.append(entry)
             continue
 
         if not live_token:
@@ -348,34 +372,56 @@ def _gateway_mirrored_pending_run_id(session_key: str, approval_id: str) -> str 
     return None
 
 
-def submit_gateway_pending_mirror(session_key: str, approval: dict) -> None:
+def submit_gateway_pending_mirror(session_key: str, approval: dict) -> tuple[dict | None, int]:
     """Mirror the live gateway head into WebUI polling state under a typed tag."""
     with _lock:
         run_id = str(approval.get("run_id") or "").strip()
         approval_id = str(approval.get("approval_id") or "").strip()
         live_gateway_queue = _gateway_queues.get(session_key) or []
-        live_head_entry = live_gateway_queue[0] if live_gateway_queue else None
-        live_head_data = getattr(live_head_entry, "data", None) or {}
-        matching_no_run_live_head = (
-            not run_id
-            and live_head_data
-            and str(live_head_data.get("command") or "") == str(approval.get("command") or "")
-            and str(live_head_data.get("description") or "") == str(approval.get("description") or "")
-            and str(live_head_data.get("pattern_key") or "") == str(approval.get("pattern_key") or "")
-            and tuple(str(k) for k in (live_head_data.get("pattern_keys") or []))
-                == tuple(str(k) for k in (approval.get("pattern_keys") or []))
-        )
-        if matching_no_run_live_head and not live_head_data.get(_GATEWAY_ENTRY_DATA_TOKEN_KEY):
-            live_head_data.pop(_GATEWAY_ENTRY_DATA_LOCAL_HEAD_KEY, None)
-            live_head_data[_GATEWAY_ENTRY_DATA_TOKEN_KEY] = uuid.uuid4().hex
-        elif not run_id and live_head_data:
-            live_head_data[_GATEWAY_ENTRY_DATA_LOCAL_HEAD_KEY] = True
-        if not run_id and not approval_id:
-            approval_id = uuid.uuid4().hex
-            approval["approval_id"] = approval_id
-        if matching_no_run_live_head and approval_id and not str(live_head_data.get("approval_id") or "").strip():
-            live_head_data["approval_id"] = approval_id
+        exact_local_entry = next(
+            (
+                entry for entry in live_gateway_queue
+                if getattr(entry, "data", None) is approval
+            ),
+            None,
+        ) if not run_id else None
+        if exact_local_entry is None and not run_id and approval_id:
+            exact_local_entry = next(
+                (
+                    entry for entry in live_gateway_queue
+                    if str(((getattr(entry, "data", None) or {}).get("approval_id") or "")).strip() == approval_id
+                ),
+                None,
+            )
+        if exact_local_entry is not None:
+            mirror_entries = _normalize_pending_queue_locked(session_key)
+            entries_to_mirror = [live_gateway_queue[0]] if live_gateway_queue else []
+            if exact_local_entry not in entries_to_mirror:
+                entries_to_mirror.append(exact_local_entry)
+            for entry in entries_to_mirror:
+                local_data = entry.data
+                token = _gateway_mirror_entry_token(entry)
+                entry_approval_id = str(local_data.get("approval_id") or "").strip()
+                if entry is exact_local_entry:
+                    entry_approval_id = approval_id or entry_approval_id or f"gwlocal:{token}"
+                    approval_id = entry_approval_id
+                    approval["approval_id"] = entry_approval_id
+                elif not entry_approval_id:
+                    entry_approval_id = f"gwlocal:{token}"
+                local_data["approval_id"] = entry_approval_id
+                if not any(
+                    _is_gateway_mirror_entry(mirror)
+                    and str(mirror.get(_GATEWAY_MIRROR_TOKEN) or "") == token
+                    for mirror in mirror_entries
+                ):
+                    mirror_entry = dict(local_data)
+                    mirror_entry["approval_id"] = entry_approval_id
+                    mirror_entry[_GATEWAY_MIRROR_FLAG] = True
+                    mirror_entry[_GATEWAY_MIRROR_TOKEN] = token
+                    mirror_entries.append(mirror_entry)
         if run_id:
+            live_head_entry = live_gateway_queue[0] if live_gateway_queue else None
+            live_head_data = getattr(live_head_entry, "data", None) or {}
             live_head_run_id = str(live_head_data.get("run_id") or "").strip()
             live_head_approval_id = str(live_head_data.get("approval_id") or "").strip()
             live_token = (
@@ -410,15 +456,10 @@ def submit_gateway_pending_mirror(session_key: str, approval: dict) -> None:
                 mirror_entry[_GATEWAY_MIRROR_FLAG] = True
                 if not _gateway_pending_mirror_locked(session_key, approval_id=approval_id, run_id=run_id):
                     _normalize_pending_queue_locked(session_key).append(mirror_entry)
-        head, total, _changed = reconcile_gateway_pending_mirror_locked(session_key)
-        approval_id = str(approval.get("approval_id") or "").strip()
-        if run_id and approval_id:
-            mirror_entry = _gateway_pending_mirror_locked(
-                session_key, approval_id=approval_id, run_id=run_id
-            )
-            if mirror_entry:
-                approval["approval_id"] = str(mirror_entry.get("approval_id") or approval_id).strip()
-        elif approval_id:
+        elif not exact_local_entry:
+            if not approval_id:
+                approval_id = uuid.uuid4().hex
+                approval["approval_id"] = approval_id
             queue = _pending.get(session_key)
             entries = queue if isinstance(queue, list) else [queue] if queue else []
             no_run_mirror = next(
@@ -437,8 +478,39 @@ def submit_gateway_pending_mirror(session_key: str, approval: dict) -> None:
                 mirror_entry["approval_id"] = approval_id
                 mirror_entry[_GATEWAY_MIRROR_FLAG] = True
                 _normalize_pending_queue_locked(session_key).append(mirror_entry)
+        head, total, _changed = reconcile_gateway_pending_mirror_locked(session_key)
         _approval_sse_notify_locked(session_key, head, total)
     publish_session_list_changed("attention_pending")
+    return (dict(head) if head else None), total
+
+
+def resolve_gateway_pending_local(
+    session_key: str, approval_id: str, choice: str, reason: str | None = None
+) -> tuple[int, dict | None, int]:
+    """Resolve the exact parked local entry bound to an approval mirror."""
+    target = None
+    with _lock:
+        approval_id = str(approval_id or "").strip()
+        gateway_queue = _gateway_queues.get(session_key) or []
+        for index, entry in enumerate(gateway_queue):
+            data = getattr(entry, "data", None) or {}
+            if str(data.get("approval_id") or "").strip() == approval_id:
+                target = gateway_queue.pop(index)
+                break
+        if gateway_queue:
+            _gateway_queues[session_key] = gateway_queue
+        else:
+            _gateway_queues.pop(session_key, None)
+        head, total, _changed = reconcile_gateway_pending_mirror_locked(session_key)
+        _approval_sse_notify_locked(session_key, head, total)
+    if target is None:
+        return 0, head, total
+    target.result = choice
+    if reason:
+        target.reason = reason
+    target.event.set()
+    publish_session_list_changed("attention_resolved")
+    return 1, head, total
 
 
 def submit_pending(session_key: str, approval: dict) -> None:

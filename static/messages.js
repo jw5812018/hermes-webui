@@ -5589,7 +5589,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     source.addEventListener('approval',e=>{
       const d=JSON.parse(e.data);
       _applyToAnchor('approval',d,e);
-      showApprovalForSession(activeSid, d, 1);
+      showApprovalForSession(activeSid, d, d.pending_count || 1);
       playAttentionSound(_attentionSoundKey(activeSid,'approval',1));
       sendBrowserNotification('Approval required',d.description||'Tool approval needed',{sid:activeSid});
     });

@@ -507,8 +507,8 @@ def _run_gateway_runs_api_streaming(
                     if not approval_data.get("approval_id"):
                         approval_data["approval_id"] = f"gwrun:{run_id}:{uuid.uuid4().hex}"
                     from api.route_approvals import submit_gateway_pending_mirror
-                    submit_gateway_pending_mirror(session_id, approval_data)
-                    put_gateway_event("approval", approval_data)
+                    head, total = submit_gateway_pending_mirror(session_id, approval_data)
+                    put_gateway_event("approval", {**(head or approval_data), "pending_count": total})
                 sse_event = "message"
                 continue
             if payload_event in {"tool.started", "tool.completed", "reasoning.available"}:
@@ -989,7 +989,8 @@ def _run_gateway_chat_streaming(
                                 _STREAM_RUN_IDS[stream_id] = _approval_run_id
                             try:
                                 from api.route_approvals import submit_gateway_pending_mirror
-                                submit_gateway_pending_mirror(session_id, approval_data)
+                                head, total = submit_gateway_pending_mirror(session_id, approval_data)
+                                approval_data = {**(head or approval_data), "pending_count": total}
                             except Exception:
                                 logger.debug("submit_gateway_pending_mirror failed", exc_info=True)
                             put_gateway_event("approval", approval_data)
@@ -1259,6 +1260,13 @@ def _run_gateway_chat_streaming(
             "hint": "Check HERMES_WEBUI_GATEWAY_BASE_URL and Gateway API server health.",
         })
     finally:
+        mapped_run_id = str(_STREAM_RUN_IDS.get(stream_id) or "").strip()
+        if mapped_run_id:
+            try:
+                from api.route_approvals import retire_gateway_pending_mirror
+                retire_gateway_pending_mirror(session_id, run_id=mapped_run_id)
+            except Exception:
+                logger.debug("Failed to retire gateway pending mirrors during teardown", exc_info=True)
         if s is not None:
             try:
                 with _get_session_agent_lock(session_id):

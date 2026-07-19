@@ -9720,6 +9720,7 @@ from api.route_approvals import (  # noqa: F401 — re-exports for backward comp
     gateway_pending_mirror,
     retire_gateway_pending_mirror,
     reconcile_gateway_pending_mirror_locked,
+    resolve_gateway_pending_local,
     submit_gateway_pending_mirror,
     submit_pending,
 )
@@ -9746,12 +9747,40 @@ except ImportError:
 
 def _session_attention_summary(session_id: str) -> dict | None:
     """Return sidebar attention metadata for pending approval/clarify work."""
+    active_run_id = ""
+    try:
+        from api.gateway_chat import _STREAM_RUN_IDS
+
+        session = get_session(session_id)
+        active_stream_id = getattr(session, "active_stream_id", None) if session is not None else None
+        if active_stream_id:
+            active_run_id = str(_STREAM_RUN_IDS.get(active_stream_id) or "").strip()
+    except Exception:
+        active_run_id = ""
+
     approval_count = 0
     with _lock:
         reconcile_gateway_pending_mirror_locked(session_id)
         queue_list = _pending.get(session_id)
         if isinstance(queue_list, list):
-            approval_count = len(queue_list)
+            gateway_queue = _gateway_queues.get(session_id) or []
+            live_gateway_run_ids = {
+                str((getattr(entry, "data", None) or {}).get("run_id") or "").strip()
+                for entry in gateway_queue
+                if str((getattr(entry, "data", None) or {}).get("run_id") or "").strip()
+            }
+            approval_count = sum(
+                1
+                for entry in queue_list
+                if not (
+                    isinstance(entry, dict)
+                    and entry.get(_GATEWAY_MIRROR_FLAG)
+                    and str(entry.get("run_id") or "").strip()
+                    and not str(entry.get(_GATEWAY_MIRROR_TOKEN) or "").strip()
+                    and str(entry.get("run_id") or "").strip() not in live_gateway_run_ids
+                    and str(entry.get("run_id") or "").strip() != active_run_id
+                )
+            )
         elif queue_list:
             approval_count = 1
     if approval_count > 0:
@@ -23802,6 +23831,7 @@ def _resolve_approval_legacy(sid: str, approval_id: str, choice: str, run_id: st
     pending = None
     found_target = False
     gateway_keys = []
+    local_gateway_approval_id = ""
     gateway_head_matches_target = False
     with _lock:
         reconcile_gateway_pending_mirror_locked(sid)
@@ -23874,20 +23904,28 @@ def _resolve_approval_legacy(sid: str, approval_id: str, choice: str, run_id: st
                 gw_data = getattr(gw_entry, "data", None) or {}
                 gw_approval_id = str(gw_data.get("approval_id") or "").strip()
                 gw_run_id = str(gw_data.get("run_id") or "").strip()
-                if run_id:
-                    gateway_head_matches_target = gw_approval_id == approval_id and gw_run_id == run_id
-                else:
-                    gateway_head_matches_target = gw_approval_id == approval_id
+                gateway_head_matches_target = bool(
+                    run_id and gw_approval_id == approval_id and gw_run_id == run_id
+                )
+                if gw_approval_id == approval_id and (not run_id or gw_run_id == run_id):
+                    local_gateway_approval_id = approval_id
+                elif not run_id and found_target and pending:
+                    pending_token = str(pending.get(_GATEWAY_MIRROR_TOKEN) or "").strip()
+                    gateway_token = str(gw_data.get("_webui_mirror_token") or "").strip()
+                    if pending_token and pending_token == gateway_token:
+                        gw_data["approval_id"] = approval_id
+                        local_gateway_approval_id = approval_id
         # Notify SSE subscribers of the new head (or empty state) so the UI
         # surfaces any trailing approvals that were queued behind this one
         # without waiting for the next submit_pending. Without this, a parallel
         # tool-call scenario (#527) would leave the second approval invisible
         # in the SSE path until the next event ever fired (the agent thread
         # would be parked indefinitely from the user's perspective).
-        if isinstance(_pending.get(sid), list) and _pending[sid]:
-            _approval_sse_notify_locked(sid, _pending[sid][0], len(_pending[sid]))
-        else:
-            _approval_sse_notify_locked(sid, None, 0)
+        if not local_gateway_approval_id:
+            if isinstance(_pending.get(sid), list) and _pending[sid]:
+                _approval_sse_notify_locked(sid, _pending[sid][0], len(_pending[sid]))
+            else:
+                _approval_sse_notify_locked(sid, None, 0)
 
     # Collect keys from both _pending and _gateway_queues
     keys_from_pending = pending.get("pattern_keys") or [pending.get("pattern_key", "")] if pending else []
@@ -23909,21 +23947,18 @@ def _resolve_approval_legacy(sid: str, approval_id: str, choice: str, run_id: st
     # This is the primary signal when streaming is active — the agent
     # thread is parked in entry.event.wait() and needs to be woken up.
     gateway_resolved = 0
-    should_resolve_gateway = (
-        not approval_id
-        or (
-            found_target
-            and (
-                not run_id
-                or gateway_head_matches_target
-            )
+    local_gateway_resolved = 0
+    if approval_id and found_target and not run_id and local_gateway_approval_id:
+        local_gateway_resolved, _head, _total = resolve_gateway_pending_local(
+            sid, local_gateway_approval_id, choice
         )
-    )
-    if should_resolve_gateway:
+    elif approval_id and found_target and run_id and gateway_head_matches_target:
+        gateway_resolved = resolve_gateway_approval(sid, choice, resolve_all=False) or 0
+    elif not approval_id:
         gateway_resolved = resolve_gateway_approval(sid, choice, resolve_all=False) or 0
     # Keep the historical no-id response path truthy for old clients/tests while
     # making stale explicit ids bounded as not-active for Slice 3b.
-    resolved = bool(pending) or bool(gateway_resolved) or not bool(approval_id)
+    resolved = bool(pending) or bool(gateway_resolved) or bool(local_gateway_resolved) or not bool(approval_id)
     if resolved:
         publish_session_list_changed("attention_resolved")
     return resolved
