@@ -14710,14 +14710,16 @@ function _toolArgsSnapshot(args, limit){
 function _idLinkedHistoricalMessageText(message){
   if(!message||typeof message!=='object') return '';
   const content=message.content;
-  if(typeof content==='string') return content.trim();
+  if(typeof content==='string') return content;
   if(!Array.isArray(content)) return '';
-  return content.map(part=>{
-    if(typeof part==='string') return part;
+  return content.filter(part=>part&&typeof part==='object'&&part.type==='text').map(part=>{
     if(!part||typeof part!=='object') return '';
-    if(part.type!=='text'&&part.type!=='input_text'&&part.type!=='output_text') return '';
     return String(part.text||part.content||'');
-  }).join('').trim();
+  }).join('\n');
+}
+
+function _idLinkedHistoricalMessageHasVisibleText(message){
+  return _idLinkedHistoricalMessageText(message).trim()!=='';
 }
 
 function _idLinkedHistoricalMessageRef(message, rawIdx){
@@ -14802,17 +14804,17 @@ function _idLinkedHistoricalTurnScene(messages, turnStart, turnEnd, options){
     if(message._anchor_activity_scene) return null;
     if(role==='assistant'){
       assistantIndexes.push(rawIdx);
-      const visibleText=_idLinkedHistoricalMessageText(message);
+      const hasVisibleText=_idLinkedHistoricalMessageHasVisibleText(message);
       const reasoningText=_assistantReasoningPayloadText(message);
-      if(visibleText) visibleAssistantIndexes.push(rawIdx);
+      if(hasVisibleText) visibleAssistantIndexes.push(rawIdx);
       if(reasoningText) return null;
       if(_idLinkedHistoricalHasVisibleSidecar(message)) return null;
       if(Array.isArray(message._partial_tool_calls)&&message._partial_tool_calls.length) return null;
       if(Array.isArray(message.content)&&message.content.some(part=>part&&typeof part==='object'&&part.type==='tool_use')) return null;
       const toolCalls=Array.isArray(message.tool_calls)?message.tool_calls:[];
-      if(toolCalls.length&&visibleText) return null;
+      if(toolCalls.length&&hasVisibleText) return null;
       if(!toolCalls.length){
-        if(visibleText) continue;
+        if(hasVisibleText) continue;
         return null;
       }
       if(message.content!==undefined&&message.content!==null&&message.content!=='') return null;

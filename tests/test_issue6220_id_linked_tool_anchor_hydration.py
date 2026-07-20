@@ -83,6 +83,7 @@ for(const name of [
   '_toolArgsSnapshot',
   '_assistantReasoningPayloadText',
   '_idLinkedHistoricalMessageText',
+  '_idLinkedHistoricalMessageHasVisibleText',
   '_idLinkedHistoricalMessageRef',
   '_idLinkedHistoricalToolArguments',
   '_idLinkedHistoricalToolResultRaw',
@@ -91,7 +92,8 @@ for(const name of [
   '_idLinkedHistoricalTurnScene',
   '_hydrateIdLinkedHistoricalToolScenes',
 ]){{
-  vm.runInContext(extractFunc(name), sandbox, {{filename:'ui.js:' + name}});
+  const fn = src.indexOf('function ' + name) >= 0 ? extractFunc(name) : null;
+  if(fn) vm.runInContext(fn, sandbox, {{filename:'ui.js:' + name}});
 }}
 
 if({str(throw_helper).lower()}){{
@@ -123,6 +125,111 @@ const toolCards = vm.runInContext(
   sandbox
 );
 console.log(JSON.stringify({{first, second, unchanged:afterFirst===JSON.stringify(messages), owners, toolCards}}));
+"""
+    result = subprocess.run(
+        [NODE, "-e", script],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _run_carry_forward_then_hydration(messages: list[dict]) -> dict:
+    assert NODE, "node is required for Anchor hydration behavior tests"
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const uiSrc = fs.readFileSync({json.dumps(str(ROOT / 'static' / 'ui.js'))}, 'utf8');
+const messagesSrc = fs.readFileSync({json.dumps(str(ROOT / 'static' / 'messages.js'))}, 'utf8');
+let src = uiSrc;
+{_EXTRACT_FUNC_JS}
+
+function extractFuncFrom(source, name){{
+  const previous = src;
+  src = source;
+  try{{ return extractFunc(name); }}
+  finally{{ src = previous; }}
+}}
+
+const sandbox = {{console}};
+sandbox.window = sandbox;
+sandbox.globalThis = sandbox;
+sandbox._EPHEMERAL_TURN_FIELDS = [
+  '_turnUsage',
+  '_turnDuration',
+  '_turnTps',
+  '_gatewayRouting',
+  '_statusCard',
+  '_anchor_stream_id',
+  '_anchor_activity_scene',
+];
+vm.createContext(sandbox);
+vm.runInContext(
+  fs.readFileSync({json.dumps(str(ANCHOR_JS))}, 'utf8'),
+  sandbox,
+  {{filename:'assistant_turn_anchors.js'}}
+);
+sandbox._redactToolTargetLabel = value => String(value);
+
+for(const name of [
+  '_clipCliToolSnippet',
+  '_cliToolResultText',
+  '_cliLooksLikePatchDiff',
+  '_cliToolResultSnippet',
+  '_prefixedCliDiffLines',
+  '_firstOwnedValue',
+  '_cliPatchSnippetFromArgs',
+  '_cliToolCardSnippet',
+  '_cliToolCardHasDiffSnippet',
+  '_anchorSceneToolCallFromRow',
+  '_toolArgsSnapshot',
+  '_assistantReasoningPayloadText',
+  '_idLinkedHistoricalMessageText',
+  '_idLinkedHistoricalMessageHasVisibleText',
+  '_idLinkedHistoricalMessageRef',
+  '_idLinkedHistoricalToolArguments',
+  '_idLinkedHistoricalToolResultRaw',
+  '_idLinkedHistoricalRedactSnippet',
+  '_idLinkedHistoricalHasVisibleSidecar',
+  '_idLinkedHistoricalTurnScene',
+  '_hydrateIdLinkedHistoricalToolScenes',
+]){{
+  const fn = uiSrc.indexOf('function ' + name) >= 0 ? extractFuncFrom(uiSrc, name) : null;
+  if(fn) vm.runInContext(fn, sandbox, {{filename:'ui.js:' + name}});
+}}
+for(const name of [
+  '_messageIdentityKey',
+  '_isHistoricalAnchorActivityScene',
+  '_carryForwardEphemeralTurnFields',
+]){{
+  const fn = messagesSrc.indexOf('function ' + name) >= 0 ? extractFuncFrom(messagesSrc, name) : null;
+  if(fn) vm.runInContext(fn, sandbox, {{filename:'messages.js:' + name}});
+}}
+
+const original = {json.dumps(messages)};
+const prev = JSON.parse(JSON.stringify(original));
+sandbox.prev = prev;
+vm.runInContext(
+  "_hydrateIdLinkedHistoricalToolScenes(prev, {{sessionId:'sid-6220', mode:'compact_worklog'}})",
+  sandbox
+);
+const next = JSON.parse(JSON.stringify(original));
+sandbox.next = next;
+vm.runInContext("_carryForwardEphemeralTurnFields(prev, next)", sandbox);
+const carried = next
+  .map((message, index) => message && message._anchor_activity_scene ? {{index, turn_id:message._anchor_activity_scene.identity.turn_id, tools:message._anchor_activity_scene.activity_rows.map(row => row.tool_call_id)}} : null)
+  .filter(Boolean);
+const hydrated = vm.runInContext(
+  "_hydrateIdLinkedHistoricalToolScenes(next, {{sessionId:'sid-6220', mode:'compact_worklog'}})",
+  sandbox
+);
+const owners = next
+  .map((message, index) => message && message._anchor_activity_scene ? {{index, turn_id:message._anchor_activity_scene.identity.turn_id, tools:message._anchor_activity_scene.activity_rows.map(row => row.tool_call_id)}} : null)
+  .filter(Boolean);
+console.log(JSON.stringify({{carried, hydrated, owners}}));
 """
     result = subprocess.run(
         [NODE, "-e", script],
@@ -186,6 +293,32 @@ def test_id_linked_historical_tool_turn_hydrates_one_anchor_scene_idempotently()
     assert row["tool"]["args"] == {"command": "pwd"}
     assert row["tool"]["snippet"] == "/workspace"
     assert row["tool"]["done"] is True
+
+
+@pytest.mark.skipif(NODE is None, reason="node is required for Anchor hydration tests")
+def test_id_linked_historical_final_answer_preserves_raw_string_whitespace():
+    messages = _linked_turn()
+    messages[-1]["content"] = "    indented code\n"
+
+    data = _run_hydration(messages)
+
+    assert data["first"] == 1
+    assert data["owners"][0]["scene"]["final_answer"] == "    indented code\n"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is required for Anchor hydration tests")
+def test_id_linked_historical_final_answer_joins_text_parts_like_renderer():
+    messages = _linked_turn()
+    messages[-1]["content"] = [
+        {"type": "text", "text": "First paragraph."},
+        {"type": "input_text", "text": "ignored input"},
+        {"type": "text", "text": "Second paragraph."},
+    ]
+
+    data = _run_hydration(messages)
+
+    assert data["first"] == 1
+    assert data["owners"][0]["scene"]["final_answer"] == "First paragraph.\nSecond paragraph."
 
 
 @pytest.mark.skipif(NODE is None, reason="node is required for Anchor hydration tests")
@@ -439,6 +572,26 @@ def test_reused_ids_in_adjacent_complete_turns_remain_turn_scoped():
     assert [owner["index"] for owner in data["owners"]] == [3, 7]
     assert [owner["scene"]["activity_rows"][0]["tool_call_id"] for owner in data["owners"]] == ["call-reused", "call-reused"]
     assert data["owners"][0]["scene"]["identity"]["turn_id"] != data["owners"][1]["scene"]["identity"]["turn_id"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is required for Anchor hydration tests")
+def test_duplicate_final_answers_rebuild_historical_scenes_after_refresh():
+    first_turn = _linked_turn("call-first")
+    second_turn = _linked_turn("call-second")
+    first_turn[1]["tool_calls"][0]["function"]["name"] = "first_tool"
+    first_turn[2]["content"] = "first result"
+    first_turn[3]["content"] = "Done"
+    second_turn[1]["tool_calls"][0]["function"]["name"] = "second_tool"
+    second_turn[2]["content"] = "second result"
+    second_turn[3]["content"] = "Done"
+
+    data = _run_carry_forward_then_hydration(first_turn + second_turn)
+
+    assert data["carried"] == []
+    assert data["hydrated"] == 2
+    assert [owner["index"] for owner in data["owners"]] == [3, 7]
+    assert [owner["tools"] for owner in data["owners"]] == [["call-first"], ["call-second"]]
+    assert data["owners"][0]["turn_id"] != data["owners"][1]["turn_id"]
 
 
 def test_render_messages_hydrates_before_visibility_and_fallback_ownership_scan():
