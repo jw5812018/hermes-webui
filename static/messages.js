@@ -3774,16 +3774,38 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
   // falls back to the full renderMd path — identical structure, just not
   // incremental. (#5455 WS2.1)
   const _anchorProseSmdCache = new Map();
-  function _anchorProseIncrementalNode(key, text){
+  function _finalizeAnchorProseIncrementalNode(st){
+    if(!st || !st.parser || st.finalized) return;
+    const body=st.node&&st.node.querySelector&&st.node.querySelector('.msg-body');
+    window.smd.parser_end(st.parser);
+    if(body){
+      if(typeof _smdMediaTailFlush === 'function') _smdMediaTailFlush(st.parser);
+      if(typeof _sanitizeSmdLinks === 'function') _sanitizeSmdLinks(body);
+      if(typeof enhanceMarkdownTables === 'function') enhanceMarkdownTables(body);
+    }
+    if(typeof _smdMediaTailClear === 'function') _smdMediaTailClear(st.parser);
+    if(typeof _smdClearParserIdentity === 'function') _smdClearParserIdentity(body, st.parser);
+    st.finalized = true;
+  }
+  function _anchorProseIncrementalNode(key, text, options){
     if(!window.smd || !key || typeof _safeSmdRenderer!=='function') return null;
+    const finalize=!!(options&&options.finalize);
     const value=String(text||'');
     const fade=typeof _shouldUseLiveProseFade==='function'&&_shouldUseLiveProseFade();
+    let st;
     try{
-      let st=_anchorProseSmdCache.get(key);
+      st=_anchorProseSmdCache.get(key);
       // Self-heal desyncs (edit/sanitize made the text no longer a pure append):
       // rebuild the parser+node from scratch, mirroring the _smdWrite guard.
       if(st && st.writtenText && !value.startsWith(st.writtenText)) st=null;
       if(st && st.fade!==fade) st=null;
+      if(st && st.finalized && st.writtenText!==value){
+        const body=st.node&&st.node.querySelector&&st.node.querySelector('.msg-body');
+        if(typeof _smdMediaTailClear === 'function') _smdMediaTailClear(st.parser);
+        if(typeof _smdClearParserIdentity === 'function') _smdClearParserIdentity(body, st.parser);
+        _anchorProseSmdCache.delete(key);
+        st=null;
+      }
       if(!st){
         const node=document.createElement('div');
         node.className='assistant-segment';
@@ -3811,9 +3833,17 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
         window.smd.parser_write(st.parser,delta);
         st.writtenText=value;
       }
+      if(finalize){
+        _finalizeAnchorProseIncrementalNode(st);
+      }
       st.node.dataset.rawText=value;
       return st.node;
     }catch(_){
+      if(st){
+        const body=st.node&&st.node.querySelector&&st.node.querySelector('.msg-body');
+        if(typeof _smdMediaTailClear === 'function') _smdMediaTailClear(st.parser);
+        if(typeof _smdClearParserIdentity === 'function') _smdClearParserIdentity(body, st.parser);
+      }
       _anchorProseSmdCache.delete(key);
       return null;
     }
@@ -5955,10 +5985,17 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           // render also populates the cache with the correctly-collapsed DOM, and
           // the same-frame JS restore absorbs the collapse so there is no jump.
           // (#5260 gate-cert: keep-open must be transient + uncached for everyone.)
+          // #6385: capture the scroll snapshot from the LIVE DOM before arming
+          // keep-open, so the collapse render below anchors to the content the
+          // reader was actually viewing — not to a stale intermediate state where
+          // the worklog was temporarily expanded.
+          const _doneLiveScrollSnapshot=typeof _captureMessageScrollSnapshot==='function'
+            ? _captureMessageScrollSnapshot()
+            : null;
           if(typeof _armKeepSettledWorklogOpen==='function') _armKeepSettledWorklogOpen(_settledStreamId);
           syncTopbar();renderMessages({preserveScroll:true});
           if(typeof _disarmKeepSettledWorklogOpen==='function') _disarmKeepSettledWorklogOpen();
-          if(typeof _renderMessagesWithScrollSnapshot==='function') _renderMessagesWithScrollSnapshot();
+          if(typeof _renderMessagesWithScrollSnapshot==='function') _renderMessagesWithScrollSnapshot({_prescrollSnapshot:_doneLiveScrollSnapshot});
           else renderMessages({preserveScroll:true});
           if(shouldFollowOnDone&&typeof scrollToBottom==='function') scrollToBottom();
           if(typeof noteWorkspaceMutationsFromToolCalls==='function') noteWorkspaceMutationsFromToolCalls(S.toolCalls);
